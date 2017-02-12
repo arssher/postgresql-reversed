@@ -159,7 +159,7 @@ MultiExecHash(HashState *node)
  * ----------------------------------------------------------------
  */
 HashState *
-ExecInitHash(Hash *node, EState *estate, int eflags)
+ExecInitHash(Hash *node, EState *estate, int eflags, PlanState *parent)
 {
 	HashState  *hashstate;
 
@@ -172,8 +172,10 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	hashstate = makeNode(HashState);
 	hashstate->ps.plan = (Plan *) node;
 	hashstate->ps.state = estate;
+	hashstate->ps.parent = parent;
 	hashstate->hashtable = NULL;
 	hashstate->hashkeys = NIL;	/* will be set by parent HashJoin */
+	hashstate->first_time_through = true;
 
 	/*
 	 * Miscellaneous initialization
@@ -200,7 +202,8 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	/*
 	 * initialize child nodes
 	 */
-	outerPlanState(hashstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	outerPlanState(hashstate) = ExecInitNode(outerPlan(node), estate, eflags,
+											 (PlanState*) hashstate);
 
 	/*
 	 * initialize tuple type. no need to initialize projection info because
@@ -1258,19 +1261,6 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 			HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(tuple));
 	}
 }
-
-
-void
-ExecReScanHash(HashState *node)
-{
-	/*
-	 * if chgParam of subnode is not null then plan will be re-scanned by
-	 * first ExecProcNode.
-	 */
-	if (node->ps.lefttree->chgParam == NULL)
-		ExecReScan(node->ps.lefttree);
-}
-
 
 /*
  * ExecHashBuildSkewHash

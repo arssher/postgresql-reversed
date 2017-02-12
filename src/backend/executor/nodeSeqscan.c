@@ -160,7 +160,7 @@ InitScanRelation(SeqScanState *node, EState *estate, int eflags)
  * ----------------------------------------------------------------
  */
 SeqScanState *
-ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
+ExecInitSeqScan(SeqScan *node, EState *estate, int eflags, PlanState *parent)
 {
 	SeqScanState *scanstate;
 
@@ -177,6 +177,7 @@ ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
 	scanstate = makeNode(SeqScanState);
 	scanstate->ss.ps.plan = (Plan *) node;
 	scanstate->ss.ps.state = estate;
+	scanstate->ss.ps.parent = parent;
 
 	/*
 	 * Miscellaneous initialization

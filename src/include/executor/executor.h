@@ -101,20 +101,9 @@ extern PGDLLIMPORT ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook;
  */
 struct Path;					/* avoid including relation.h here */
 
-extern void ExecReScan(PlanState *node);
-extern void ExecMarkPos(PlanState *node);
-extern void ExecRestrPos(PlanState *node);
 extern bool ExecSupportsMarkRestore(struct Path *pathnode);
 extern bool ExecSupportsBackwardScan(Plan *node);
 extern bool ExecMaterializesOutput(NodeTag plantype);
-
-/*
- * prototypes from functions in execCurrent.c
- */
-extern bool execCurrentOf(CurrentOfExpr *cexpr,
-			  ExprContext *econtext,
-			  Oid table_oid,
-			  ItemPointer current_tid);
 
 /*
  * prototypes from functions in execGrouping.c
@@ -221,7 +210,8 @@ extern void EvalPlanQualEnd(EPQState *epqstate);
 /*
  * prototypes from functions in execProcnode.c
  */
-extern PlanState *ExecInitNode(Plan *node, EState *estate, int eflags);
+extern PlanState *ExecInitNode(Plan *node, EState *estate, int eflags,
+	PlanState *parent);
 extern TupleTableSlot *ExecProcNode(PlanState *node);
 extern Node *MultiExecProcNode(PlanState *node);
 extern void ExecEndNode(PlanState *node);

@@ -296,6 +296,8 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	bool		sendTuples;
 	MemoryContext oldcontext;
 
+	elog(ERROR, "Come back later, query execution not yet supported");
+	return;
 	/* sanity checks */
 	Assert(queryDesc != NULL);
 
@@ -499,32 +501,9 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 void
 ExecutorRewind(QueryDesc *queryDesc)
 {
-	EState	   *estate;
-	MemoryContext oldcontext;
-
-	/* sanity checks */
-	Assert(queryDesc != NULL);
-
-	estate = queryDesc->estate;
-
-	Assert(estate != NULL);
-
-	/* It's probably not sensible to rescan updating queries */
-	Assert(queryDesc->operation == CMD_SELECT);
-
-	/*
-	 * Switch into per-query memory context
-	 */
-	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
-
-	/*
-	 * rescan plan
-	 */
-	ExecReScan(queryDesc->planstate);
-
-	MemoryContextSwitchTo(oldcontext);
+	elog(ERROR, "Rewinding not supported");
+	return;
 }
-
 
 /*
  * ExecCheckRTPerms
@@ -943,7 +922,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		if (bms_is_member(i, plannedstmt->rewindPlanIDs))
 			sp_eflags |= EXEC_FLAG_REWIND;
 
-		subplanstate = ExecInitNode(subplan, estate, sp_eflags);
+		subplanstate = ExecInitNode(subplan, estate, sp_eflags, NULL);
 
 		estate->es_subplanstates = lappend(estate->es_subplanstates,
 										   subplanstate);
@@ -956,7 +935,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	 * tree.  This opens files, allocates storage and leaves us ready to start
 	 * processing tuples.
 	 */
-	planstate = ExecInitNode(plan, estate, eflags);
+	planstate = ExecInitNode(plan, estate, eflags, NULL);
 
 	/*
 	 * Get the tuple descriptor describing the type of tuples to return.
@@ -2859,7 +2838,7 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 		Plan	   *subplan = (Plan *) lfirst(l);
 		PlanState  *subplanstate;
 
-		subplanstate = ExecInitNode(subplan, estate, 0);
+		subplanstate = ExecInitNode(subplan, estate, 0, NULL);
 		estate->es_subplanstates = lappend(estate->es_subplanstates,
 										   subplanstate);
 	}
@@ -2869,7 +2848,7 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 	 * of the plan tree we need to run.  This opens files, allocates storage
 	 * and leaves us ready to start processing tuples.
 	 */
-	epqstate->planstate = ExecInitNode(planTree, estate, 0);
+	epqstate->planstate = ExecInitNode(planTree, estate, 0, NULL);
 
 	MemoryContextSwitchTo(oldcontext);
 }

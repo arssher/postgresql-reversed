@@ -412,7 +412,7 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	 * then initialize outer plan
 	 */
 	outerPlan = outerPlan(node);
-	outerPlanState(limitstate) = ExecInitNode(outerPlan, estate, eflags);
+	outerPlanState(limitstate) = ExecInitNode(outerPlan, estate, eflags, NULL);
 
 	/*
 	 * limit nodes do no projections, so initialize projection info for this
@@ -436,23 +436,4 @@ ExecEndLimit(LimitState *node)
 {
 	ExecFreeExprContext(&node->ps);
 	ExecEndNode(outerPlanState(node));
-}
-
-
-void
-ExecReScanLimit(LimitState *node)
-{
-	/*
-	 * Recompute limit/offset in case parameters changed, and reset the state
-	 * machine.  We must do this before rescanning our child node, in case
-	 * it's a Sort that we are passing the parameters down to.
-	 */
-	recompute_limits(node);
-
-	/*
-	 * if chgParam of subnode is not null then plan will be re-scanned by
-	 * first ExecProcNode.
-	 */
-	if (node->ps.lefttree->chgParam == NULL)
-		ExecReScan(node->ps.lefttree);
 }
