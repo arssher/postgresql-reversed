@@ -13,7 +13,7 @@ top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
 OBJS = execAmi.o execGrouping.o execIndexing.o execJunk.o \
-       execMain.o execParallel.o execProcnode.o execQual.o \
+       execMain.o execProcnode.o execQual.o \
        execScan.o execTuples.o \
        execUtils.o functions.o instrument.o nodeAppend.o nodeAgg.o \
        nodeBitmapAnd.o nodeBitmapOr.o \

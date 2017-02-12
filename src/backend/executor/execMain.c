@@ -1742,125 +1742,6 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 }
 
 /*
- * ExecWithCheckOptions -- check that tuple satisfies any WITH CHECK OPTIONs
- * of the specified kind.
- *
- * Note that this needs to be called multiple times to ensure that all kinds of
- * WITH CHECK OPTIONs are handled (both those from views which have the WITH
- * CHECK OPTION set and from row level security policies).  See ExecInsert()
- * and ExecUpdate().
- */
-void
-ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
-					 TupleTableSlot *slot, EState *estate)
-{
-	Relation	rel = resultRelInfo->ri_RelationDesc;
-	TupleDesc	tupdesc = RelationGetDescr(rel);
-	ExprContext *econtext;
-	ListCell   *l1,
-			   *l2;
-
-	/*
-	 * We will use the EState's per-tuple context for evaluating constraint
-	 * expressions (creating it if it's not already there).
-	 */
-	econtext = GetPerTupleExprContext(estate);
-
-	/* Arrange for econtext's scan tuple to be the tuple under test */
-	econtext->ecxt_scantuple = slot;
-
-	/* Check each of the constraints */
-	forboth(l1, resultRelInfo->ri_WithCheckOptions,
-			l2, resultRelInfo->ri_WithCheckOptionExprs)
-	{
-		WithCheckOption *wco = (WithCheckOption *) lfirst(l1);
-		ExprState  *wcoExpr = (ExprState *) lfirst(l2);
-
-		/*
-		 * Skip any WCOs which are not the kind we are looking for at this
-		 * time.
-		 */
-		if (wco->kind != kind)
-			continue;
-
-		/*
-		 * WITH CHECK OPTION checks are intended to ensure that the new tuple
-		 * is visible (in the case of a view) or that it passes the
-		 * 'with-check' policy (in the case of row security). If the qual
-		 * evaluates to NULL or FALSE, then the new tuple won't be included in
-		 * the view or doesn't pass the 'with-check' policy for the table.  We
-		 * need ExecQual to return FALSE for NULL to handle the view case (the
-		 * opposite of what we do above for CHECK constraints).
-		 */
-		if (!ExecQual((List *) wcoExpr, econtext, false))
-		{
-			char	   *val_desc;
-			Bitmapset  *modifiedCols;
-			Bitmapset  *insertedCols;
-			Bitmapset  *updatedCols;
-
-			switch (wco->kind)
-			{
-					/*
-					 * For WITH CHECK OPTIONs coming from views, we might be
-					 * able to provide the details on the row, depending on
-					 * the permissions on the relation (that is, if the user
-					 * could view it directly anyway).  For RLS violations, we
-					 * don't include the data since we don't know if the user
-					 * should be able to view the tuple as as that depends on
-					 * the USING policy.
-					 */
-				case WCO_VIEW_CHECK:
-					insertedCols = GetInsertedColumns(resultRelInfo, estate);
-					updatedCols = GetUpdatedColumns(resultRelInfo, estate);
-					modifiedCols = bms_union(insertedCols, updatedCols);
-					val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
-															 slot,
-															 tupdesc,
-															 modifiedCols,
-															 64);
-
-					ereport(ERROR,
-							(errcode(ERRCODE_WITH_CHECK_OPTION_VIOLATION),
-					  errmsg("new row violates check option for view \"%s\"",
-							 wco->relname),
-							 val_desc ? errdetail("Failing row contains %s.",
-												  val_desc) : 0));
-					break;
-				case WCO_RLS_INSERT_CHECK:
-				case WCO_RLS_UPDATE_CHECK:
-					if (wco->polname != NULL)
-						ereport(ERROR,
-								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-								 errmsg("new row violates row-level security policy \"%s\" for table \"%s\"",
-										wco->polname, wco->relname)));
-					else
-						ereport(ERROR,
-								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-								 errmsg("new row violates row-level security policy for table \"%s\"",
-										wco->relname)));
-					break;
-				case WCO_RLS_CONFLICT_CHECK:
-					if (wco->polname != NULL)
-						ereport(ERROR,
-								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-								 errmsg("new row violates row-level security policy \"%s\" (USING expression) for table \"%s\"",
-										wco->polname, wco->relname)));
-					else
-						ereport(ERROR,
-								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-								 errmsg("new row violates row-level security policy (USING expression) for table \"%s\"",
-										wco->relname)));
-					break;
-				default:
-					elog(ERROR, "unrecognized WCO kind: %u", wco->kind);
-					break;
-			}
-		}
-	}
-}
-
-/*
  * ExecBuildSlotValueDescription -- construct a string representing a tuple
  *
  * This is intentionally very similar to BuildIndexValueDescription, but
@@ -2057,55 +1938,6 @@ ExecFindRowMark(EState *estate, Index rti, bool missing_ok)
 		elog(ERROR, "failed to find ExecRowMark for rangetable index %u", rti);
 	return NULL;
 }
-
-/*
- * ExecBuildAuxRowMark -- create an ExecAuxRowMark struct
- *
- * Inputs are the underlying ExecRowMark struct and the targetlist of the
- * input plan node (not planstate node!).  We need the latter to find out
- * the column numbers of the resjunk columns.
- */
-ExecAuxRowMark *
-ExecBuildAuxRowMark(ExecRowMark *erm, List *targetlist)
-{
-	ExecAuxRowMark *aerm = (ExecAuxRowMark *) palloc0(sizeof(ExecAuxRowMark));
-	char		resname[32];
-
-	aerm->rowmark = erm;
-
-	/* Look up the resjunk columns associated with this rowmark */
-	if (erm->markType != ROW_MARK_COPY)
-	{
-		/* need ctid for all methods other than COPY */
-		snprintf(resname, sizeof(resname), "ctid%u", erm->rowmarkId);
-		aerm->ctidAttNo = ExecFindJunkAttributeInTlist(targetlist,
-													   resname);
-		if (!AttributeNumberIsValid(aerm->ctidAttNo))
-			elog(ERROR, "could not find junk %s column", resname);
-	}
-	else
-	{
-		/* need wholerow if COPY */
-		snprintf(resname, sizeof(resname), "wholerow%u", erm->rowmarkId);
-		aerm->wholeAttNo = ExecFindJunkAttributeInTlist(targetlist,
-														resname);
-		if (!AttributeNumberIsValid(aerm->wholeAttNo))
-			elog(ERROR, "could not find junk %s column", resname);
-	}
-
-	/* if child rel, need tableoid */
-	if (erm->rti != erm->prti)
-	{
-		snprintf(resname, sizeof(resname), "tableoid%u", erm->rowmarkId);
-		aerm->toidAttNo = ExecFindJunkAttributeInTlist(targetlist,
-													   resname);
-		if (!AttributeNumberIsValid(aerm->toidAttNo))
-			elog(ERROR, "could not find junk %s column", resname);
-	}
-
-	return aerm;
-}
-
 
 /*
  * EvalPlanQual logic --- recheck modified tuple(s) to see if we want to
@@ -2446,43 +2278,6 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 }
 
 /*
- * EvalPlanQualInit -- initialize during creation of a plan state node
- * that might need to invoke EPQ processing.
- *
- * Note: subplan/auxrowmarks can be NULL/NIL if they will be set later
- * with EvalPlanQualSetPlan.
- */
-void
-EvalPlanQualInit(EPQState *epqstate, EState *estate,
-				 Plan *subplan, List *auxrowmarks, int epqParam)
-{
-	/* Mark the EPQ state inactive */
-	epqstate->estate = NULL;
-	epqstate->planstate = NULL;
-	epqstate->origslot = NULL;
-	/* ... and remember data that EvalPlanQualBegin will need */
-	epqstate->plan = subplan;
-	epqstate->arowMarks = auxrowmarks;
-	epqstate->epqParam = epqParam;
-}
-
-/*
- * EvalPlanQualSetPlan -- set or change subplan of an EPQState.
- *
- * We need this so that ModifyTable can deal with multiple subplans.
- */
-void
-EvalPlanQualSetPlan(EPQState *epqstate, Plan *subplan, List *auxrowmarks)
-{
-	/* If we have a live EPQ query, shut it down */
-	EvalPlanQualEnd(epqstate);
-	/* And set/change the plan pointer */
-	epqstate->plan = subplan;
-	/* The rowmarks depend on the plan, too */
-	epqstate->arowMarks = auxrowmarks;
-}
-
-/*
  * Install one test tuple into EPQ state, or clear test tuple if tuple == NULL
  *
  * NB: passed tuple must be palloc'd; it may get freed later
@@ -2502,19 +2297,6 @@ EvalPlanQualSetTuple(EPQState *epqstate, Index rti, HeapTuple tuple)
 		heap_freetuple(estate->es_epqTuple[rti - 1]);
 	estate->es_epqTuple[rti - 1] = tuple;
 	estate->es_epqTupleSet[rti - 1] = true;
-}
-
-/*
- * Fetch back the current test tuple (if any) for the specified RTI
- */
-HeapTuple
-EvalPlanQualGetTuple(EPQState *epqstate, Index rti)
-{
-	EState	   *estate = epqstate->estate;
-
-	Assert(rti > 0);
-
-	return estate->es_epqTuple[rti - 1];
 }
 
 /*
@@ -2851,58 +2633,4 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 	epqstate->planstate = ExecInitNode(planTree, estate, 0, NULL);
 
 	MemoryContextSwitchTo(oldcontext);
-}
-
-/*
- * EvalPlanQualEnd -- shut down at termination of parent plan state node,
- * or if we are done with the current EPQ child.
- *
- * This is a cut-down version of ExecutorEnd(); basically we want to do most
- * of the normal cleanup, but *not* close result relations (which we are
- * just sharing from the outer query).  We do, however, have to close any
- * trigger target relations that got opened, since those are not shared.
- * (There probably shouldn't be any of the latter, but just in case...)
- */
-void
-EvalPlanQualEnd(EPQState *epqstate)
-{
-	EState	   *estate = epqstate->estate;
-	MemoryContext oldcontext;
-	ListCell   *l;
-
-	if (estate == NULL)
-		return;					/* idle, so nothing to do */
-
-	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
-
-	ExecEndNode(epqstate->planstate);
-
-	foreach(l, estate->es_subplanstates)
-	{
-		PlanState  *subplanstate = (PlanState *) lfirst(l);
-
-		ExecEndNode(subplanstate);
-	}
-
-	/* throw away the per-estate tuple table */
-	ExecResetTupleTable(estate->es_tupleTable, false);
-
-	/* close any trigger target relations attached to this EState */
-	foreach(l, estate->es_trig_target_relations)
-	{
-		ResultRelInfo *resultRelInfo = (ResultRelInfo *) lfirst(l);
-
-		/* Close indices and then the relation itself */
-		ExecCloseIndices(resultRelInfo);
-		heap_close(resultRelInfo->ri_RelationDesc, NoLock);
-	}
-
-	MemoryContextSwitchTo(oldcontext);
-
-	FreeExecutorState(estate);
-
-	/* Mark EPQState idle */
-	epqstate->estate = NULL;
-	epqstate->planstate = NULL;
-	epqstate->origslot = NULL;
 }
