@@ -110,6 +110,7 @@ typedef struct CustomScanMethods
 	Node	   *(*CreateCustomScanState) (CustomScan *cscan);
 } CustomScanMethods;
 
+
 /*
  * Execution-time methods for a CustomScanState.  This is more complex than
  * what we need for a custom path or scan.

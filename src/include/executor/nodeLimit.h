@@ -16,9 +16,10 @@
 
 #include "nodes/execnodes.h"
 
-extern LimitState *ExecInitLimit(Limit *node, EState *estate, int eflags);
+extern LimitState *ExecInitLimit(Limit *node, EState *estate, int eflags,
+								 PlanState *parent);
 extern TupleTableSlot *ExecLimit(LimitState *node);
+extern bool pushTupleToLimit(TupleTableSlot *slot, LimitState *node);
 extern void ExecEndLimit(LimitState *node);
-extern void ExecReScanLimit(LimitState *node);
 
-#endif   /* NODELIMIT_H */
+#endif   /* NODELIMIT_H  */

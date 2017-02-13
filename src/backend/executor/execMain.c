@@ -59,6 +59,7 @@
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 #include "utils/tqual.h"
+#include "executor/executor.h"
 
 
 /* Hooks for plugins to get control in ExecutorStart/Run/Finish/End */
@@ -75,13 +76,7 @@ static void InitPlan(QueryDesc *queryDesc, int eflags);
 static void CheckValidRowMarkRel(Relation rel, RowMarkType markType);
 static void ExecPostprocessPlan(EState *estate);
 static void ExecEndPlan(PlanState *planstate, EState *estate);
-static void ExecutePlan(EState *estate, PlanState *planstate,
-			bool use_parallel_mode,
-			CmdType operation,
-			bool sendTuples,
-			uint64 numberTuples,
-			ScanDirection direction,
-			DestReceiver *dest);
+static void RunNode(PlanState *planstate);
 static bool ExecCheckRTEPerms(RangeTblEntry *rte);
 static bool ExecCheckRTEPermsModified(Oid relOid, Oid userid,
 						  Bitmapset *modifiedCols,
@@ -331,18 +326,24 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	if (sendTuples)
 		(*dest->rStartup) (dest, operation, queryDesc->tupDesc);
 
+	/* set up state needed for sending tuples to the dest */
+	estate->es_current_tuple_count = 0;
+	estate->es_sendTuples = sendTuples;
+	estate->es_numberTuplesRequested = count;
+	estate->es_operation = operation;
+	estate->es_dest = dest;
+
+	/*
+	 * Set the direction.
+	 */
+	estate->es_direction = direction;
+
 	/*
 	 * run plan
 	 */
 	if (!ScanDirectionIsNoMovement(direction))
-		ExecutePlan(estate,
-					queryDesc->planstate,
-					queryDesc->plannedstmt->parallelModeNeeded,
-					operation,
-					sendTuples,
-					count,
-					direction,
-					dest);
+		/* Run each leaf in right order	 */
+		RunNode(queryDesc->planstate);
 
 	/*
 	 * shutdown tuple receiver, if we started it
@@ -499,32 +500,9 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 void
 ExecutorRewind(QueryDesc *queryDesc)
 {
-	EState	   *estate;
-	MemoryContext oldcontext;
-
-	/* sanity checks */
-	Assert(queryDesc != NULL);
-
-	estate = queryDesc->estate;
-
-	Assert(estate != NULL);
-
-	/* It's probably not sensible to rescan updating queries */
-	Assert(queryDesc->operation == CMD_SELECT);
-
-	/*
-	 * Switch into per-query memory context
-	 */
-	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
-
-	/*
-	 * rescan plan
-	 */
-	ExecReScan(queryDesc->planstate);
-
-	MemoryContextSwitchTo(oldcontext);
+	elog(ERROR, "Rewinding not supported");
+	return;
 }
-
 
 /*
  * ExecCheckRTPerms
@@ -943,7 +921,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		if (bms_is_member(i, plannedstmt->rewindPlanIDs))
 			sp_eflags |= EXEC_FLAG_REWIND;
 
-		subplanstate = ExecInitNode(subplan, estate, sp_eflags);
+		subplanstate = ExecInitNode(subplan, estate, sp_eflags, NULL);
 
 		estate->es_subplanstates = lappend(estate->es_subplanstates,
 										   subplanstate);
@@ -956,7 +934,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	 * tree.  This opens files, allocates storage and leaves us ready to start
 	 * processing tuples.
 	 */
-	planstate = ExecInitNode(plan, estate, eflags);
+	planstate = ExecInitNode(plan, estate, eflags, NULL);
 
 	/*
 	 * Get the tuple descriptor describing the type of tuples to return.
@@ -1504,130 +1482,6 @@ ExecEndPlan(PlanState *planstate, EState *estate)
 	}
 }
 
-/* ----------------------------------------------------------------
- *		ExecutePlan
- *
- *		Processes the query plan until we have retrieved 'numberTuples' tuples,
- *		moving in the specified direction.
- *
- *		Runs to completion if numberTuples is 0
- *
- * Note: the ctid attribute is a 'junk' attribute that is removed before the
- * user can see it
- * ----------------------------------------------------------------
- */
-static void
-ExecutePlan(EState *estate,
-			PlanState *planstate,
-			bool use_parallel_mode,
-			CmdType operation,
-			bool sendTuples,
-			uint64 numberTuples,
-			ScanDirection direction,
-			DestReceiver *dest)
-{
-	TupleTableSlot *slot;
-	uint64		current_tuple_count;
-
-	/*
-	 * initialize local variables
-	 */
-	current_tuple_count = 0;
-
-	/*
-	 * Set the direction.
-	 */
-	estate->es_direction = direction;
-
-	/*
-	 * If a tuple count was supplied, we must force the plan to run without
-	 * parallelism, because we might exit early.  Also disable parallelism
-	 * when writing into a relation, because no database changes are allowed
-	 * in parallel mode.
-	 */
-	if (numberTuples || dest->mydest == DestIntoRel)
-		use_parallel_mode = false;
-
-	/*
-	 * If a tuple count was supplied, we must force the plan to run without
-	 * parallelism, because we might exit early.
-	 */
-	if (use_parallel_mode)
-		EnterParallelMode();
-
-	/*
-	 * Loop until we've processed the proper number of tuples from the plan.
-	 */
-	for (;;)
-	{
-		/* Reset the per-output-tuple exprcontext */
-		ResetPerTupleExprContext(estate);
-
-		/*
-		 * Execute the plan and obtain a tuple
-		 */
-		slot = ExecProcNode(planstate);
-
-		/*
-		 * if the tuple is null, then we assume there is nothing more to
-		 * process so we just end the loop...
-		 */
-		if (TupIsNull(slot))
-		{
-			/* Allow nodes to release or shut down resources. */
-			(void) ExecShutdownNode(planstate);
-			break;
-		}
-
-		/*
-		 * If we have a junk filter, then project a new tuple with the junk
-		 * removed.
-		 *
-		 * Store this new "clean" tuple in the junkfilter's resultSlot.
-		 * (Formerly, we stored it back over the "dirty" tuple, which is WRONG
-		 * because that tuple slot has the wrong descriptor.)
-		 */
-		if (estate->es_junkFilter != NULL)
-			slot = ExecFilterJunk(estate->es_junkFilter, slot);
-
-		/*
-		 * If we are supposed to send the tuple somewhere, do so. (In
-		 * practice, this is probably always the case at this point.)
-		 */
-		if (sendTuples)
-		{
-			/*
-			 * If we are not able to send the tuple, we assume the destination
-			 * has closed and no more tuples can be sent. If that's the case,
-			 * end the loop.
-			 */
-			if (!((*dest->receiveSlot) (slot, dest)))
-				break;
-		}
-
-		/*
-		 * Count tuples processed, if this is a SELECT.  (For other operation
-		 * types, the ModifyTable plan node must count the appropriate
-		 * events.)
-		 */
-		if (operation == CMD_SELECT)
-			(estate->es_processed)++;
-
-		/*
-		 * check our tuple count.. if we've processed the proper number then
-		 * quit, else loop again and process more tuples.  Zero numberTuples
-		 * means no limit.
-		 */
-		current_tuple_count++;
-		if (numberTuples && numberTuples == current_tuple_count)
-			break;
-	}
-
-	if (use_parallel_mode)
-		ExitParallelMode();
-}
-
-
 /*
  * ExecRelCheck --- check that tuple meets constraints for result relation
  *
@@ -1758,125 +1612,6 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 							RelationGetRelationName(rel), failed),
 			  val_desc ? errdetail("Failing row contains %s.", val_desc) : 0,
 					 errtableconstraint(rel, failed)));
-		}
-	}
-}
-
-/*
- * ExecWithCheckOptions -- check that tuple satisfies any WITH CHECK OPTIONs
- * of the specified kind.
- *
- * Note that this needs to be called multiple times to ensure that all kinds of
- * WITH CHECK OPTIONs are handled (both those from views which have the WITH
- * CHECK OPTION set and from row level security policies).  See ExecInsert()
- * and ExecUpdate().
- */
-void
-ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
-					 TupleTableSlot *slot, EState *estate)
-{
-	Relation	rel = resultRelInfo->ri_RelationDesc;
-	TupleDesc	tupdesc = RelationGetDescr(rel);
-	ExprContext *econtext;
-	ListCell   *l1,
-			   *l2;
-
-	/*
-	 * We will use the EState's per-tuple context for evaluating constraint
-	 * expressions (creating it if it's not already there).
-	 */
-	econtext = GetPerTupleExprContext(estate);
-
-	/* Arrange for econtext's scan tuple to be the tuple under test */
-	econtext->ecxt_scantuple = slot;
-
-	/* Check each of the constraints */
-	forboth(l1, resultRelInfo->ri_WithCheckOptions,
-			l2, resultRelInfo->ri_WithCheckOptionExprs)
-	{
-		WithCheckOption *wco = (WithCheckOption *) lfirst(l1);
-		ExprState  *wcoExpr = (ExprState *) lfirst(l2);
-
-		/*
-		 * Skip any WCOs which are not the kind we are looking for at this
-		 * time.
-		 */
-		if (wco->kind != kind)
-			continue;
-
-		/*
-		 * WITH CHECK OPTION checks are intended to ensure that the new tuple
-		 * is visible (in the case of a view) or that it passes the
-		 * 'with-check' policy (in the case of row security). If the qual
-		 * evaluates to NULL or FALSE, then the new tuple won't be included in
-		 * the view or doesn't pass the 'with-check' policy for the table.  We
-		 * need ExecQual to return FALSE for NULL to handle the view case (the
-		 * opposite of what we do above for CHECK constraints).
-		 */
-		if (!ExecQual((List *) wcoExpr, econtext, false))
-		{
-			char	   *val_desc;
-			Bitmapset  *modifiedCols;
-			Bitmapset  *insertedCols;
-			Bitmapset  *updatedCols;
-
-			switch (wco->kind)
-			{
-					/*
-					 * For WITH CHECK OPTIONs coming from views, we might be
-					 * able to provide the details on the row, depending on
-					 * the permissions on the relation (that is, if the user
-					 * could view it directly anyway).  For RLS violations, we
-					 * don't include the data since we don't know if the user
-					 * should be able to view the tuple as as that depends on
-					 * the USING policy.
-					 */
-				case WCO_VIEW_CHECK:
-					insertedCols = GetInsertedColumns(resultRelInfo, estate);
-					updatedCols = GetUpdatedColumns(resultRelInfo, estate);
-					modifiedCols = bms_union(insertedCols, updatedCols);
-					val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
-															 slot,
-															 tupdesc,
-															 modifiedCols,
-															 64);
-
-					ereport(ERROR,
-							(errcode(ERRCODE_WITH_CHECK_OPTION_VIOLATION),
-					  errmsg("new row violates check option for view \"%s\"",
-							 wco->relname),
-							 val_desc ? errdetail("Failing row contains %s.",
-												  val_desc) : 0));
-					break;
-				case WCO_RLS_INSERT_CHECK:
-				case WCO_RLS_UPDATE_CHECK:
-					if (wco->polname != NULL)
-						ereport(ERROR,
-								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-								 errmsg("new row violates row-level security policy \"%s\" for table \"%s\"",
-										wco->polname, wco->relname)));
-					else
-						ereport(ERROR,
-								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-								 errmsg("new row violates row-level security policy for table \"%s\"",
-										wco->relname)));
-					break;
-				case WCO_RLS_CONFLICT_CHECK:
-					if (wco->polname != NULL)
-						ereport(ERROR,
-								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-								 errmsg("new row violates row-level security policy \"%s\" (USING expression) for table \"%s\"",
-										wco->polname, wco->relname)));
-					else
-						ereport(ERROR,
-								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-								 errmsg("new row violates row-level security policy (USING expression) for table \"%s\"",
-										wco->relname)));
-					break;
-				default:
-					elog(ERROR, "unrecognized WCO kind: %u", wco->kind);
-					break;
-			}
 		}
 	}
 }
@@ -2078,55 +1813,6 @@ ExecFindRowMark(EState *estate, Index rti, bool missing_ok)
 		elog(ERROR, "failed to find ExecRowMark for rangetable index %u", rti);
 	return NULL;
 }
-
-/*
- * ExecBuildAuxRowMark -- create an ExecAuxRowMark struct
- *
- * Inputs are the underlying ExecRowMark struct and the targetlist of the
- * input plan node (not planstate node!).  We need the latter to find out
- * the column numbers of the resjunk columns.
- */
-ExecAuxRowMark *
-ExecBuildAuxRowMark(ExecRowMark *erm, List *targetlist)
-{
-	ExecAuxRowMark *aerm = (ExecAuxRowMark *) palloc0(sizeof(ExecAuxRowMark));
-	char		resname[32];
-
-	aerm->rowmark = erm;
-
-	/* Look up the resjunk columns associated with this rowmark */
-	if (erm->markType != ROW_MARK_COPY)
-	{
-		/* need ctid for all methods other than COPY */
-		snprintf(resname, sizeof(resname), "ctid%u", erm->rowmarkId);
-		aerm->ctidAttNo = ExecFindJunkAttributeInTlist(targetlist,
-													   resname);
-		if (!AttributeNumberIsValid(aerm->ctidAttNo))
-			elog(ERROR, "could not find junk %s column", resname);
-	}
-	else
-	{
-		/* need wholerow if COPY */
-		snprintf(resname, sizeof(resname), "wholerow%u", erm->rowmarkId);
-		aerm->wholeAttNo = ExecFindJunkAttributeInTlist(targetlist,
-														resname);
-		if (!AttributeNumberIsValid(aerm->wholeAttNo))
-			elog(ERROR, "could not find junk %s column", resname);
-	}
-
-	/* if child rel, need tableoid */
-	if (erm->rti != erm->prti)
-	{
-		snprintf(resname, sizeof(resname), "tableoid%u", erm->rowmarkId);
-		aerm->toidAttNo = ExecFindJunkAttributeInTlist(targetlist,
-													   resname);
-		if (!AttributeNumberIsValid(aerm->toidAttNo))
-			elog(ERROR, "could not find junk %s column", resname);
-	}
-
-	return aerm;
-}
-
 
 /*
  * EvalPlanQual logic --- recheck modified tuple(s) to see if we want to
@@ -2467,43 +2153,6 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 }
 
 /*
- * EvalPlanQualInit -- initialize during creation of a plan state node
- * that might need to invoke EPQ processing.
- *
- * Note: subplan/auxrowmarks can be NULL/NIL if they will be set later
- * with EvalPlanQualSetPlan.
- */
-void
-EvalPlanQualInit(EPQState *epqstate, EState *estate,
-				 Plan *subplan, List *auxrowmarks, int epqParam)
-{
-	/* Mark the EPQ state inactive */
-	epqstate->estate = NULL;
-	epqstate->planstate = NULL;
-	epqstate->origslot = NULL;
-	/* ... and remember data that EvalPlanQualBegin will need */
-	epqstate->plan = subplan;
-	epqstate->arowMarks = auxrowmarks;
-	epqstate->epqParam = epqParam;
-}
-
-/*
- * EvalPlanQualSetPlan -- set or change subplan of an EPQState.
- *
- * We need this so that ModifyTable can deal with multiple subplans.
- */
-void
-EvalPlanQualSetPlan(EPQState *epqstate, Plan *subplan, List *auxrowmarks)
-{
-	/* If we have a live EPQ query, shut it down */
-	EvalPlanQualEnd(epqstate);
-	/* And set/change the plan pointer */
-	epqstate->plan = subplan;
-	/* The rowmarks depend on the plan, too */
-	epqstate->arowMarks = auxrowmarks;
-}
-
-/*
  * Install one test tuple into EPQ state, or clear test tuple if tuple == NULL
  *
  * NB: passed tuple must be palloc'd; it may get freed later
@@ -2523,19 +2172,6 @@ EvalPlanQualSetTuple(EPQState *epqstate, Index rti, HeapTuple tuple)
 		heap_freetuple(estate->es_epqTuple[rti - 1]);
 	estate->es_epqTuple[rti - 1] = tuple;
 	estate->es_epqTupleSet[rti - 1] = true;
-}
-
-/*
- * Fetch back the current test tuple (if any) for the specified RTI
- */
-HeapTuple
-EvalPlanQualGetTuple(EPQState *epqstate, Index rti)
-{
-	EState	   *estate = epqstate->estate;
-
-	Assert(rti > 0);
-
-	return estate->es_epqTuple[rti - 1];
 }
 
 /*
@@ -2859,7 +2495,7 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 		Plan	   *subplan = (Plan *) lfirst(l);
 		PlanState  *subplanstate;
 
-		subplanstate = ExecInitNode(subplan, estate, 0);
+		subplanstate = ExecInitNode(subplan, estate, 0, NULL);
 		estate->es_subplanstates = lappend(estate->es_subplanstates,
 										   subplanstate);
 	}
@@ -2869,61 +2505,114 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 	 * of the plan tree we need to run.  This opens files, allocates storage
 	 * and leaves us ready to start processing tuples.
 	 */
-	epqstate->planstate = ExecInitNode(planTree, estate, 0);
+	epqstate->planstate = ExecInitNode(planTree, estate, 0, NULL);
 
 	MemoryContextSwitchTo(oldcontext);
 }
 
+
 /*
- * EvalPlanQualEnd -- shut down at termination of parent plan state node,
- * or if we are done with the current EPQ child.
+ * This function pushes the ready tuple to it's destination. It should
+ * be called by top-level PlanState.
+ * For now, I added the state needed for this to estate, specifically
+ * current_tuple_count, sendTuples, numberTuplesRequested (old numberTuples),
+ * cmdType, dest.
  *
- * This is a cut-down version of ExecutorEnd(); basically we want to do most
- * of the normal cleanup, but *not* close result relations (which we are
- * just sharing from the outer query).  We do, however, have to close any
- * trigger target relations that got opened, since those are not shared.
- * (There probably shouldn't be any of the latter, but just in case...)
+ * slot is the tuple to push
+ * planstate is top-level node
+ * returns true, if we are ready to accept more tuples, false otherwise
+ */
+bool
+SendReadyTuple(TupleTableSlot *slot, PlanState *planstate)
+{
+	EState *estate;
+	bool sendTuples;
+	CmdType operation;
+	DestReceiver *dest;
+
+	estate = planstate->state;
+	sendTuples = estate->es_sendTuples;
+	operation = estate->es_operation;
+	dest = estate->es_dest;
+
+	if (TupIsNull(slot))
+	{
+		/* Allow nodes to release or shut down resources. */
+		(void) ExecShutdownNode(planstate);
+		return false;
+	}
+
+	/*
+	 * If we have a junk filter, then project a new tuple with the junk
+	 * removed.
+	 *
+	 * Store this new "clean" tuple in the junkfilter's resultSlot.
+	 * (Formerly, we stored it back over the "dirty" tuple, which is WRONG
+	 * because that tuple slot has the wrong descriptor.)
+	 */
+	if (estate->es_junkFilter != NULL)
+		slot = ExecFilterJunk(estate->es_junkFilter, slot);
+
+	/*
+	 * If we are supposed to send the tuple somewhere, do so. (In
+	 * practice, this is probably always the case at this point.)
+	 */
+	if (sendTuples)
+	{
+		/*
+		 * If we are not able to send the tuple, we assume the destination
+		 * has closed and no more tuples can be sent.
+		 */
+		if (!((*dest->receiveSlot) (slot, dest)))
+			return false;
+	}
+
+	/*
+	 * Count tuples processed, if this is a SELECT.  (For other operation
+	 * types, the ModifyTable plan node must count the appropriate
+	 * events.)
+	 */
+	if (operation == CMD_SELECT)
+		(estate->es_processed)++;
+
+	/*
+	 * check our tuple count.. if we've processed the proper number then
+	 * quit, else process more tuples.  Zero numberTuplesRequested
+	 * means no limit.
+	 */
+	estate->es_current_tuple_count++;
+	if (estate->es_numberTuplesRequested &&
+		estate->es_numberTuplesRequested == estate->es_current_tuple_count)
+		return false;
+
+	/* Should we do it here? */
+	ResetPerTupleExprContext(estate);
+	return true;
+}
+
+
+/*
+ * When pushing, we have to call pushTuple on each leaf of the tree in correct
+ * order: first inner sides, then outer. This function does exactly that.
  */
 void
-EvalPlanQualEnd(EPQState *epqstate)
+RunNode(PlanState *planstate)
 {
-	EState	   *estate = epqstate->estate;
-	MemoryContext oldcontext;
-	ListCell   *l;
+	Assert(planstate != NULL);
 
-	if (estate == NULL)
-		return;					/* idle, so nothing to do */
-
-	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
-
-	ExecEndNode(epqstate->planstate);
-
-	foreach(l, estate->es_subplanstates)
+	if (innerPlanState(planstate) != NULL)
 	{
-		PlanState  *subplanstate = (PlanState *) lfirst(l);
-
-		ExecEndNode(subplanstate);
+		RunNode(innerPlanState(planstate));
+		/* I assume that if inner node exists, outer exists too */
+		RunNode(outerPlanState(planstate));
+		return;
+	}
+	if (outerPlanState(planstate) != NULL)
+	{
+		RunNode(outerPlanState(planstate));
+		return;
 	}
 
-	/* throw away the per-estate tuple table */
-	ExecResetTupleTable(estate->es_tupleTable, false);
-
-	/* close any trigger target relations attached to this EState */
-	foreach(l, estate->es_trig_target_relations)
-	{
-		ResultRelInfo *resultRelInfo = (ResultRelInfo *) lfirst(l);
-
-		/* Close indices and then the relation itself */
-		ExecCloseIndices(resultRelInfo);
-		heap_close(resultRelInfo->ri_RelationDesc, NoLock);
-	}
-
-	MemoryContextSwitchTo(oldcontext);
-
-	FreeExecutorState(estate);
-
-	/* Mark EPQState idle */
-	epqstate->estate = NULL;
-	epqstate->planstate = NULL;
-	epqstate->origslot = NULL;
+	/* node has no childs, it is a leaf */
+	pushTuple(NULL, planstate, NULL);
 }

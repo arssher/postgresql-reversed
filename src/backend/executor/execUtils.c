@@ -838,31 +838,6 @@ ExecCloseScanRelation(Relation scanrel)
 }
 
 /*
- * UpdateChangedParamSet
- *		Add changed parameters to a plan node's chgParam set
- */
-void
-UpdateChangedParamSet(PlanState *node, Bitmapset *newchg)
-{
-	Bitmapset  *parmset;
-
-	/*
-	 * The plan node only depends on params listed in its allParam set. Don't
-	 * include anything else into its chgParam set.
-	 */
-	parmset = bms_intersect(node->plan->allParam, newchg);
-
-	/*
-	 * Keep node->chgParam == NULL if there's not actually any members; this
-	 * allows the simplest possible tests in executor node files.
-	 */
-	if (!bms_is_empty(parmset))
-		node->chgParam = bms_join(node->chgParam, parmset);
-	else
-		bms_free(parmset);
-}
-
-/*
  * Register a shutdown callback in an ExprContext.
  *
  * Shutdown callbacks will be called (in reverse order of registration)

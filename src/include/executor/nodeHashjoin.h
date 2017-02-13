@@ -17,8 +17,17 @@
 #include "nodes/execnodes.h"
 #include "storage/buffile.h"
 
-extern HashJoinState *ExecInitHashJoin(HashJoin *node, EState *estate, int eflags);
-extern TupleTableSlot *ExecHashJoin(HashJoinState *node);
+/* Returns true if doing null-fill on outer relation */
+#define HJ_FILL_OUTER(hjstate)	((hjstate)->hj_NullInnerTupleSlot != NULL)
+/* Returns true if doing null-fill on inner relation */
+#define HJ_FILL_INNER(hjstate)	((hjstate)->hj_NullOuterTupleSlot != NULL)
+
+extern HashJoinState *ExecInitHashJoin(HashJoin *node, EState *estate,
+									   int eflags, PlanState *parent);
+extern bool pushTupleToHashJoinFromInner(TupleTableSlot *slot,
+								  HashJoinState *node);
+extern bool pushTupleToHashJoinFromOuter(TupleTableSlot *slot,
+										 HashJoinState *node);
 extern void ExecEndHashJoin(HashJoinState *node);
 extern void ExecReScanHashJoin(HashJoinState *node);
 

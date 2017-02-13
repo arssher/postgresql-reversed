@@ -291,11 +291,6 @@ ExecScanSubPlan(SubPlanState *node,
 	}
 
 	/*
-	 * Now that we've set up its parameters, we can reset the subplan.
-	 */
-	ExecReScan(planstate);
-
-	/*
 	 * For all sublink types except EXPR_SUBLINK and ARRAY_SUBLINK, the result
 	 * is boolean as are the results of the combining operators. We combine
 	 * results across tuples (if the subplan produces more than one) using OR
@@ -537,11 +532,6 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 	 * to the per-query context for manipulating the child plan.
 	 */
 	oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
-
-	/*
-	 * Reset subplan to start.
-	 */
-	ExecReScan(planstate);
 
 	/*
 	 * Scan the subplan and load the hash table(s).  Note that when there are

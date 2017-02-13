@@ -24,6 +24,7 @@
 #include "utils/sortsupport.h"
 #include "utils/tuplestore.h"
 #include "utils/tuplesort.h"
+#include "tcop/dest.h" /* for DestReceiver type in EState */
 
 
 /* ----------------
@@ -389,7 +390,9 @@ typedef struct EState
 
 	List	   *es_rowMarks;	/* List of ExecRowMarks */
 
-	uint64		es_processed;	/* # of tuples processed */
+	/* # of tuples processed, only for SELECT queries */
+	uint64		es_processed;
+
 	Oid			es_lastoid;		/* last oid processed (by INSERT) */
 
 	int			es_top_eflags;	/* eflags passed to ExecutorStart */
@@ -401,6 +404,16 @@ typedef struct EState
 	List	   *es_subplanstates;		/* List of PlanState for SubPlans */
 
 	List	   *es_auxmodifytables;		/* List of secondary ModifyTableStates */
+
+	/*
+	 * State needed to push tuples to dest in push model, technically it is
+	 * local variables from old ExecutePlan
+	 */
+	uint64		es_current_tuple_count;
+	bool		es_sendTuples;
+	uint64		es_numberTuplesRequested;
+	CmdType		es_operation;
+	DestReceiver *es_dest;
 
 	/*
 	 * this ExprContext is for per-output-tuple operations, such as constraint
@@ -1041,6 +1054,7 @@ typedef struct PlanState
 	 */
 	List	   *targetlist;		/* target list to be computed at this node */
 	List	   *qual;			/* implicitly-ANDed qual conditions */
+	struct PlanState *parent;   /* parent node, NULL if root */
 	struct PlanState *lefttree; /* input plan tree(s) */
 	struct PlanState *righttree;
 	List	   *initPlan;		/* Init SubPlanState nodes (un-correlated expr
@@ -1972,6 +1986,8 @@ typedef struct HashState
 	HashJoinTable hashtable;	/* hash table for the hashjoin */
 	List	   *hashkeys;		/* list of ExprState nodes */
 	/* hashkeys is same as parent's hj_InnerHashKeys */
+	/* on the first push we must build the hashtable */
+	bool first_time_through;
 } HashState;
 
 /* ----------------
@@ -2033,13 +2049,9 @@ typedef struct LockRowsState
  */
 typedef enum
 {
-	LIMIT_INITIAL,				/* initial state for LIMIT node */
-	LIMIT_RESCAN,				/* rescan after recomputing parameters */
-	LIMIT_EMPTY,				/* there are no returnable rows */
-	LIMIT_INWINDOW,				/* have returned a row in the window */
-	LIMIT_SUBPLANEOF,			/* at EOF of subplan (within window) */
-	LIMIT_WINDOWEND,			/* stepped off end of window */
-	LIMIT_WINDOWSTART			/* stepped off beginning of window */
+	LIMIT_INITIAL,		/* initial state for LIMIT node */
+	LIMIT_ACTIVE,		/* waiting for tuples */
+	LIMIT_DONE,			/* pushed all needed tuples */
 } LimitStateCond;
 
 typedef struct LimitState

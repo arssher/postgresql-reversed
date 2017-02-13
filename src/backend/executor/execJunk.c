@@ -200,18 +200,6 @@ ExecInitJunkFilterConversion(List *targetList,
 }
 
 /*
- * ExecFindJunkAttribute
- *
- * Locate the specified junk attribute in the junk filter's targetlist,
- * and return its resno.  Returns InvalidAttrNumber if not found.
- */
-AttrNumber
-ExecFindJunkAttribute(JunkFilter *junkfilter, const char *attrName)
-{
-	return ExecFindJunkAttributeInTlist(junkfilter->jf_targetList, attrName);
-}
-
-/*
  * ExecFindJunkAttributeInTlist
  *
  * Find a junk attribute given a subplan's targetlist (not necessarily
