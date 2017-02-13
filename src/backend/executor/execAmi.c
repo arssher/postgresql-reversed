@@ -15,7 +15,6 @@
 #include "access/amapi.h"
 #include "access/htup_details.h"
 #include "executor/execdebug.h"
-#include "executor/nodeSubplan.h"
 #include "executor/nodeHash.h"
 #include "executor/nodeHashjoin.h"
 #include "executor/nodeLimit.h"

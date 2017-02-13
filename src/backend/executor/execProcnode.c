@@ -82,7 +82,6 @@
 #include "executor/nodeHashjoin.h"
 #include "executor/nodeLimit.h"
 #include "executor/nodeSeqscan.h"
-#include "executor/nodeSubplan.h"
 #include "nodes/nodeFuncs.h"
 #include "miscadmin.h"
 
@@ -151,22 +150,6 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 			result = NULL;		/* keep compiler quiet */
 			break;
 	}
-
-	/*
-	 * Initialize any initPlans present in this node.  The planner put them in
-	 * a separate list for us.
-	 */
-	subps = NIL;
-	foreach(l, node->initPlan)
-	{
-		SubPlan    *subplan = (SubPlan *) lfirst(l);
-		SubPlanState *sstate;
-
-		Assert(IsA(subplan, SubPlan));
-		sstate = ExecInitSubPlan(subplan, result);
-		subps = lappend(subps, sstate);
-	}
-	result->initPlan = subps;
 
 	/* Set up instrumentation for this node if requested */
 	if (estate->es_instrument)

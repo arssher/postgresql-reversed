@@ -30,7 +30,7 @@ At first, we will:
 * And then we will start implementing the nodes. The first nodes will be
   SeqScan, Hash, HashJoin and Limit.
 
-In general, we will treat the old code as follows:
+In general, we will try treat the old code as follows:
 * If something (function, struct, etc) is used only in the executor directory
   and we have not yet implemented the 'reversed' version of the same behaviour,
   remove it. For instance, we will remove all nodes at the beginning.

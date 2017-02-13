@@ -110,6 +110,43 @@ typedef struct CustomScanMethods
 	Node	   *(*CreateCustomScanState) (CustomScan *cscan);
 } CustomScanMethods;
 
+
+/*
+ * Execution-time methods for a CustomScanState.  This is more complex than
+ * what we need for a custom path or scan.
+ */
+typedef struct CustomExecMethods
+{
+	const char *CustomName;
+
+	/* Required executor methods */
+	void		(*BeginCustomScan) (CustomScanState *node,
+												EState *estate,
+												int eflags);
+	TupleTableSlot *(*ExecCustomScan) (CustomScanState *node);
+	void		(*EndCustomScan) (CustomScanState *node);
+	void		(*ReScanCustomScan) (CustomScanState *node);
+
+	/* Optional methods: needed if mark/restore is supported */
+	void		(*MarkPosCustomScan) (CustomScanState *node);
+	void		(*RestrPosCustomScan) (CustomScanState *node);
+
+	/* Optional methods: needed if parallel execution is supported */
+	Size		(*EstimateDSMCustomScan) (CustomScanState *node,
+													  ParallelContext *pcxt);
+	void		(*InitializeDSMCustomScan) (CustomScanState *node,
+														ParallelContext *pcxt,
+														void *coordinate);
+	void		(*InitializeWorkerCustomScan) (CustomScanState *node,
+														   shm_toc *toc,
+														   void *coordinate);
+
+	/* Optional: print additional information in EXPLAIN */
+	void		(*ExplainCustomScan) (CustomScanState *node,
+												  List *ancestors,
+												  ExplainState *es);
+} CustomExecMethods;
+
 extern void RegisterCustomScanMethods(const CustomScanMethods *methods);
 extern const CustomScanMethods *GetCustomScanMethods(const char *CustomName,
 					 bool missing_ok);
