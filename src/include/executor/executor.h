@@ -190,11 +190,6 @@ extern Datum GetAttributeByNum(HeapTupleHeader tuple, AttrNumber attrno,
 				  bool *isNull);
 extern Datum GetAttributeByName(HeapTupleHeader tuple, const char *attname,
 				   bool *isNull);
-extern Tuplestorestate *ExecMakeTableFunctionResult(ExprState *funcexpr,
-							ExprContext *econtext,
-							MemoryContext argContext,
-							TupleDesc expectedDesc,
-							bool randomAccess);
 extern Datum ExecEvalExprSwitchContext(ExprState *expression, ExprContext *econtext,
 						  bool *isNull, ExprDoneCond *isDone);
 extern ExprState *ExecInitExpr(Expr *node, PlanState *parent);
@@ -215,7 +210,6 @@ extern TupleTableSlot *ExecScan(ScanState *node, ExecScanAccessMtd accessMtd,
 		 ExecScanRecheckMtd recheckMtd);
 extern void ExecAssignScanProjectionInfo(ScanState *node);
 extern void ExecAssignScanProjectionInfoWithVarno(ScanState *node, Index varno);
-extern void ExecScanReScan(ScanState *node);
 
 /*
  * prototypes from functions in execTuples.c

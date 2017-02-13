@@ -264,25 +264,6 @@ ExecEndSeqScan(SeqScanState *node)
  * ----------------------------------------------------------------
  */
 
-/* ----------------------------------------------------------------
- *		ExecReScanSeqScan
- *
- *		Rescans the relation.
- * ----------------------------------------------------------------
- */
-void
-ExecReScanSeqScan(SeqScanState *node)
-{
-	HeapScanDesc scan;
-
-	scan = node->ss.ss_currentScanDesc;
-
-	if (scan != NULL)
-		heap_rescan(scan,		/* scan desc */
-					NULL);		/* new scan keys */
-
-	ExecScanReScan((ScanState *) node);
-}
 
 /* ----------------------------------------------------------------
  *						Parallel Scan Support
