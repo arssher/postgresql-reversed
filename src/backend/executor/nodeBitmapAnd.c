@@ -81,7 +81,7 @@ ExecInitBitmapAnd(BitmapAnd *node, EState *estate, int eflags)
 	foreach(l, node->bitmapplans)
 	{
 		initNode = (Plan *) lfirst(l);
-		bitmapplanstates[i] = ExecInitNode(initNode, estate, eflags);
+		bitmapplanstates[i] = ExecInitNode(initNode, estate, eflags, NULL);
 		i++;
 	}
 

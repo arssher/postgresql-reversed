@@ -486,8 +486,10 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	outerNode = outerPlan(node);
 	hashNode = (Hash *) innerPlan(node);
 
-	outerPlanState(hjstate) = ExecInitNode(outerNode, estate, eflags);
-	innerPlanState(hjstate) = ExecInitNode((Plan *) hashNode, estate, eflags);
+	outerPlanState(hjstate) = ExecInitNode(outerNode, estate, eflags,
+										   (PlanState *) hjstate);
+	innerPlanState(hjstate) = ExecInitNode((Plan *) hashNode, estate, eflags,
+										   (PlanState *) hjstate);
 
 	/*
 	 * tuple table initialization

@@ -2482,7 +2482,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	if (node->aggstrategy == AGG_HASHED)
 		eflags &= ~EXEC_FLAG_REWIND;
 	outerPlan = outerPlan(node);
-	outerPlanState(aggstate) = ExecInitNode(outerPlan, estate, eflags);
+	outerPlanState(aggstate) = ExecInitNode(outerPlan, estate, eflags, NULL);
 
 	/*
 	 * initialize source tuple type.

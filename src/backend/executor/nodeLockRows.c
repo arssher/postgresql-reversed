@@ -376,7 +376,7 @@ ExecInitLockRows(LockRows *node, EState *estate, int eflags)
 	/*
 	 * then initialize outer plan
 	 */
-	outerPlanState(lrstate) = ExecInitNode(outerPlan, estate, eflags);
+	outerPlanState(lrstate) = ExecInitNode(outerPlan, estate, eflags, NULL);
 
 	/*
 	 * LockRows nodes do no projections, so initialize projection info for

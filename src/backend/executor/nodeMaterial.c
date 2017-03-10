@@ -219,7 +219,7 @@ ExecInitMaterial(Material *node, EState *estate, int eflags)
 	eflags &= ~(EXEC_FLAG_REWIND | EXEC_FLAG_BACKWARD | EXEC_FLAG_MARK);
 
 	outerPlan = outerPlan(node);
-	outerPlanState(matstate) = ExecInitNode(outerPlan, estate, eflags);
+	outerPlanState(matstate) = ExecInitNode(outerPlan, estate, eflags, NULL);
 
 	/*
 	 * initialize tuple type.  no need to initialize projection info because

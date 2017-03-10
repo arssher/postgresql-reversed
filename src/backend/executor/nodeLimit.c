@@ -412,7 +412,7 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	 * then initialize outer plan
 	 */
 	outerPlan = outerPlan(node);
-	outerPlanState(limitstate) = ExecInitNode(outerPlan, estate, eflags);
+	outerPlanState(limitstate) = ExecInitNode(outerPlan, estate, eflags, NULL);
 
 	/*
 	 * limit nodes do no projections, so initialize projection info for this

@@ -128,12 +128,13 @@
  *		  'node' is the current node of the plan produced by the query planner
  *		  'estate' is the shared execution state for the plan tree
  *		  'eflags' is a bitwise OR of flag bits described in executor.h
+ *        'parent' is parent of the node
  *
  *		Returns a PlanState node corresponding to the given Plan node.
  * ------------------------------------------------------------------------
  */
 PlanState *
-ExecInitNode(Plan *node, EState *estate, int eflags)
+ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 {
 	PlanState  *result;
 	List	   *subps;

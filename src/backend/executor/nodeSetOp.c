@@ -533,7 +533,7 @@ ExecInitSetOp(SetOp *node, EState *estate, int eflags)
 	 */
 	if (node->strategy == SETOP_HASHED)
 		eflags &= ~EXEC_FLAG_REWIND;
-	outerPlanState(setopstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	outerPlanState(setopstate) = ExecInitNode(outerPlan(node), estate, eflags, NULL);
 
 	/*
 	 * setop nodes do no projections, so initialize projection info for this

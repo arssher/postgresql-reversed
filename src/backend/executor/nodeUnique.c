@@ -143,7 +143,7 @@ ExecInitUnique(Unique *node, EState *estate, int eflags)
 	/*
 	 * then initialize outer plan
 	 */
-	outerPlanState(uniquestate) = ExecInitNode(outerPlan(node), estate, eflags);
+	outerPlanState(uniquestate) = ExecInitNode(outerPlan(node), estate, eflags, NULL);
 
 	/*
 	 * unique nodes do no projections, so initialize projection info for this

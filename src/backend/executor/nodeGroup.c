@@ -233,7 +233,7 @@ ExecInitGroup(Group *node, EState *estate, int eflags)
 	/*
 	 * initialize child nodes
 	 */
-	outerPlanState(grpstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	outerPlanState(grpstate) = ExecInitNode(outerPlan(node), estate, eflags, NULL);
 
 	/*
 	 * initialize tuple type.

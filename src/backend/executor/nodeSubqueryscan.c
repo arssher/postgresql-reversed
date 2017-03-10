@@ -136,7 +136,7 @@ ExecInitSubqueryScan(SubqueryScan *node, EState *estate, int eflags)
 	/*
 	 * initialize subquery
 	 */
-	subquerystate->subplan = ExecInitNode(node->subplan, estate, eflags);
+	subquerystate->subplan = ExecInitNode(node->subplan, estate, eflags, NULL);
 
 	subquerystate->ss.ps.ps_TupFromTlist = false;
 

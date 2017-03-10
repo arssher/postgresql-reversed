@@ -241,8 +241,8 @@ ExecInitRecursiveUnion(RecursiveUnion *node, EState *estate, int eflags)
 	/*
 	 * initialize child nodes
 	 */
-	outerPlanState(rustate) = ExecInitNode(outerPlan(node), estate, eflags);
-	innerPlanState(rustate) = ExecInitNode(innerPlan(node), estate, eflags);
+	outerPlanState(rustate) = ExecInitNode(outerPlan(node), estate, eflags, NULL);
+	innerPlanState(rustate) = ExecInitNode(innerPlan(node), estate, eflags, NULL);
 
 	/*
 	 * If hashing, precompute fmgr lookup data for inner loop, and create the

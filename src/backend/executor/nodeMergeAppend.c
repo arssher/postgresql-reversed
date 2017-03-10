@@ -112,7 +112,7 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 	{
 		Plan	   *initNode = (Plan *) lfirst(lc);
 
-		mergeplanstates[i] = ExecInitNode(initNode, estate, eflags);
+		mergeplanstates[i] = ExecInitNode(initNode, estate, eflags, NULL);
 		i++;
 	}
 

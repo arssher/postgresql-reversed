@@ -1522,9 +1522,10 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 	 *
 	 * inner child must support MARK/RESTORE.
 	 */
-	outerPlanState(mergestate) = ExecInitNode(outerPlan(node), estate, eflags);
+	outerPlanState(mergestate) = ExecInitNode(outerPlan(node), estate, eflags, NULL);
 	innerPlanState(mergestate) = ExecInitNode(innerPlan(node), estate,
-											  eflags | EXEC_FLAG_MARK);
+											  eflags | EXEC_FLAG_MARK,
+											  NULL);
 
 	/*
 	 * For certain types of inner child nodes, it is advantageous to issue

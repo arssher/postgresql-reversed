@@ -221,7 +221,8 @@ extern void EvalPlanQualEnd(EPQState *epqstate);
 /*
  * prototypes from functions in execProcnode.c
  */
-extern PlanState *ExecInitNode(Plan *node, EState *estate, int eflags);
+extern PlanState *ExecInitNode(Plan *node, EState *estate, int eflags,
+	PlanState *parent);
 extern TupleTableSlot *ExecProcNode(PlanState *node);
 extern Node *MultiExecProcNode(PlanState *node);
 extern void ExecEndNode(PlanState *node);

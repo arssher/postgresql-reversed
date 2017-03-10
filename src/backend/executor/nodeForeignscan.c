@@ -224,7 +224,7 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	/* Initialize any outer plan. */
 	if (outerPlan(node))
 		outerPlanState(scanstate) =
-			ExecInitNode(outerPlan(node), estate, eflags);
+			ExecInitNode(outerPlan(node), estate, eflags, NULL);
 
 	/*
 	 * Tell the FDW to initialize the scan.

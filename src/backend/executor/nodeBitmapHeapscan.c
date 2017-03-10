@@ -646,7 +646,7 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	 * relation's indexes, and we want to be sure we have acquired a lock on
 	 * the relation first.
 	 */
-	outerPlanState(scanstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	outerPlanState(scanstate) = ExecInitNode(outerPlan(node), estate, eflags, NULL);
 
 	/*
 	 * all done.

@@ -1873,7 +1873,7 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	 * initialize child nodes
 	 */
 	outerPlan = outerPlan(node);
-	outerPlanState(winstate) = ExecInitNode(outerPlan, estate, eflags);
+	outerPlanState(winstate) = ExecInitNode(outerPlan, estate, eflags, NULL);
 
 	/*
 	 * initialize source tuple type (which is also the tuple type that we'll
