@@ -16,13 +16,125 @@
 
 #include "nodes/execnodes.h"
 #include "storage/buffile.h"
+#include "executor/executor.h"
+#include "executor/hashjoin.h"
+#include "access/htup_details.h"
+#include "utils/memutils.h"
 
-extern HashJoinState *ExecInitHashJoin(HashJoin *node, EState *estate, int eflags);
-extern TupleTableSlot *ExecHashJoin(HashJoinState *node);
+/* Returns true if doing null-fill on outer relation */
+#define HJ_FILL_OUTER(hjstate)	((hjstate)->hj_NullInnerTupleSlot != NULL)
+/* Returns true if doing null-fill on inner relation */
+#define HJ_FILL_INNER(hjstate)	((hjstate)->hj_NullOuterTupleSlot != NULL)
+
+extern HashJoinState *ExecInitHashJoin(HashJoin *node, EState *estate,
+									   int eflags, PlanState *parent);
+extern bool pushTupleToHashJoinFromInner(TupleTableSlot *slot,
+								  HashJoinState *node);
+extern bool pushTupleToHashJoinFromOuter(TupleTableSlot *slot,
+										 HashJoinState *node);
 extern void ExecEndHashJoin(HashJoinState *node);
 extern void ExecReScanHashJoin(HashJoinState *node);
 
 extern void ExecHashJoinSaveTuple(MinimalTuple tuple, uint32 hashvalue,
 					  BufFile **fileptr);
 
-#endif   /* NODEHASHJOIN_H */
+/* inline funcs decls and implementations */
+#pragma GCC diagnostic warning "-Winline"
+static inline bool CheckOtherQualAndPush(HashJoinState *node);
+static inline bool PushUnmatched(HashJoinState *node);
+static inline bool CheckJoinQualAndPush(HashJoinState *node);
+
+/*
+ * Everything is ready for checking otherqual and projecting; do that,
+ * and push the result.
+ *
+ * Returns true if parent accepts more tuples, false otherwise
+ */
+static inline bool CheckOtherQualAndPush(HashJoinState *node)
+{
+	ExprContext *econtext = node->js.ps.ps_ExprContext;
+	List *otherqual = node->js.ps.qual;
+	ExprDoneCond isDone;
+	TupleTableSlot *result;
+	bool parent_accepts_tuples = true;
+
+	if (otherqual == NIL ||
+		ExecQual(otherqual, econtext, false))
+	{
+		result = ExecProject(node->js.ps.ps_ProjInfo, &isDone);
+
+		if (isDone != ExprEndResult)
+		{
+			parent_accepts_tuples = pushTuple(result, node->js.ps.parent,
+											  (PlanState *) node);
+			while (parent_accepts_tuples && isDone == ExprMultipleResult)
+			{
+				result = ExecProject(node->js.ps.ps_ProjInfo, &isDone);
+				parent_accepts_tuples = pushTuple(result, node->js.ps.parent,
+												  (PlanState *) node);
+			}
+		}
+	}
+	else
+		InstrCountFiltered2(node, 1);
+
+	/*
+	 * Reset per-tuple memory context to free any expression evaluation
+	 * storage. Note this can't happen until we're done projecting out tuples
+	 * from a join tuple.
+	 */
+	ResetExprContext(econtext);
+
+
+	return parent_accepts_tuples;
+}
+
+/*
+ * Push inner tuple with no match, ExecScanHashTableForUnmatchedAndPush
+ * prepared state needed for ExecQual.
+ *
+ * Returns true if parent accepts more tuples, false otherwise.
+ */
+static inline bool PushUnmatched(HashJoinState *node)
+{
+	ExprContext *econtext = node->js.ps.ps_ExprContext;
+
+	/*
+	 * Generate a fake join tuple with nulls for the outer tuple,
+	 * and return it if it passes the non-join quals.
+	 */
+	econtext->ecxt_outertuple = node->hj_NullOuterTupleSlot;
+	return CheckOtherQualAndPush(node);
+}
+
+/*
+ * We have found inner tuple with hashed quals matched to the current outer
+ * tuple. Now check non-hashed quals, other quals, then project and push
+ * the result.
+ *
+ * State for ExecQual was already set by ExecScanHashBucketAndPush and before.
+ * Returns true if parent accepts more tuples, false otherwise.
+ */
+static inline bool CheckJoinQualAndPush(HashJoinState *node)
+{
+	List	   *joinqual = node->js.joinqual;
+	ExprContext *econtext = node->js.ps.ps_ExprContext;
+
+	/*
+	 * Only the joinquals determine tuple match status, but all
+	 * quals must pass to actually return the tuple.
+	 */
+	if (joinqual == NIL || ExecQual(joinqual, econtext, false))
+	{
+		node->hj_MatchedOuter = true;
+		HeapTupleHeaderSetMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple));
+
+		return CheckOtherQualAndPush(node);
+	}
+	else
+		InstrCountFiltered1(node, 1);
+
+	return true;
+}
+
+#endif	 /* NODEHASHJOIN_H */
