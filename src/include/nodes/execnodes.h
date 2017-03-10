@@ -2049,13 +2049,9 @@ typedef struct LockRowsState
  */
 typedef enum
 {
-	LIMIT_INITIAL,				/* initial state for LIMIT node */
-	LIMIT_RESCAN,				/* rescan after recomputing parameters */
-	LIMIT_EMPTY,				/* there are no returnable rows */
-	LIMIT_INWINDOW,				/* have returned a row in the window */
-	LIMIT_SUBPLANEOF,			/* at EOF of subplan (within window) */
-	LIMIT_WINDOWEND,			/* stepped off end of window */
-	LIMIT_WINDOWSTART			/* stepped off beginning of window */
+	LIMIT_INITIAL,		/* initial state for LIMIT node */
+	LIMIT_ACTIVE,		/* waiting for tuples */
+	LIMIT_DONE,			/* pushed all needed tuples */
 } LimitStateCond;
 
 typedef struct LimitState
