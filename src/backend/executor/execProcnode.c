@@ -163,8 +163,8 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 			break;
 
 		/*
-		* materialization nodes
-		*/
+		 * materialization nodes
+		 */
 		case T_Hash:
 			result = (PlanState *) ExecInitHash((Hash *) node,
 												estate, eflags, parent);
