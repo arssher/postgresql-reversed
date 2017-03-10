@@ -365,240 +365,26 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 }
 
 
-/* ----------------------------------------------------------------
- *		ExecProcNode
- *
- *		Execute the given node to return a(nother) tuple.
- * ----------------------------------------------------------------
+/*
+ * Unsupported, left to avoid deleting 19k lines of existing code
  */
 TupleTableSlot *
 ExecProcNode(PlanState *node)
 {
-	TupleTableSlot *result;
-
-	CHECK_FOR_INTERRUPTS();
-
-	if (node->chgParam != NULL) /* something changed */
-		ExecReScan(node);		/* let ReScan handle this */
-
-	if (node->instrument)
-		InstrStartNode(node->instrument);
-
-	switch (nodeTag(node))
-	{
-			/*
-			 * control nodes
-			 */
-		case T_ResultState:
-			result = ExecResult((ResultState *) node);
-			break;
-
-		case T_ModifyTableState:
-			result = ExecModifyTable((ModifyTableState *) node);
-			break;
-
-		case T_AppendState:
-			result = ExecAppend((AppendState *) node);
-			break;
-
-		case T_MergeAppendState:
-			result = ExecMergeAppend((MergeAppendState *) node);
-			break;
-
-		case T_RecursiveUnionState:
-			result = ExecRecursiveUnion((RecursiveUnionState *) node);
-			break;
-
-			/* BitmapAndState does not yield tuples */
-
-			/* BitmapOrState does not yield tuples */
-
-			/*
-			 * scan nodes
-			 */
-		case T_SeqScanState:
-			result = ExecSeqScan((SeqScanState *) node);
-			break;
-
-		case T_SampleScanState:
-			result = ExecSampleScan((SampleScanState *) node);
-			break;
-
-		case T_IndexScanState:
-			result = ExecIndexScan((IndexScanState *) node);
-			break;
-
-		case T_IndexOnlyScanState:
-			result = ExecIndexOnlyScan((IndexOnlyScanState *) node);
-			break;
-
-			/* BitmapIndexScanState does not yield tuples */
-
-		case T_BitmapHeapScanState:
-			result = ExecBitmapHeapScan((BitmapHeapScanState *) node);
-			break;
-
-		case T_TidScanState:
-			result = ExecTidScan((TidScanState *) node);
-			break;
-
-		case T_SubqueryScanState:
-			result = ExecSubqueryScan((SubqueryScanState *) node);
-			break;
-
-		case T_FunctionScanState:
-			result = ExecFunctionScan((FunctionScanState *) node);
-			break;
-
-		case T_ValuesScanState:
-			result = ExecValuesScan((ValuesScanState *) node);
-			break;
-
-		case T_CteScanState:
-			result = ExecCteScan((CteScanState *) node);
-			break;
-
-		case T_WorkTableScanState:
-			result = ExecWorkTableScan((WorkTableScanState *) node);
-			break;
-
-		case T_ForeignScanState:
-			result = ExecForeignScan((ForeignScanState *) node);
-			break;
-
-		case T_CustomScanState:
-			result = ExecCustomScan((CustomScanState *) node);
-			break;
-
-			/*
-			 * join nodes
-			 */
-		case T_NestLoopState:
-			result = ExecNestLoop((NestLoopState *) node);
-			break;
-
-		case T_MergeJoinState:
-			result = ExecMergeJoin((MergeJoinState *) node);
-			break;
-
-		case T_HashJoinState:
-			result = ExecHashJoin((HashJoinState *) node);
-			break;
-
-			/*
-			 * materialization nodes
-			 */
-		case T_MaterialState:
-			result = ExecMaterial((MaterialState *) node);
-			break;
-
-		case T_SortState:
-			result = ExecSort((SortState *) node);
-			break;
-
-		case T_GroupState:
-			result = ExecGroup((GroupState *) node);
-			break;
-
-		case T_AggState:
-			result = ExecAgg((AggState *) node);
-			break;
-
-		case T_WindowAggState:
-			result = ExecWindowAgg((WindowAggState *) node);
-			break;
-
-		case T_UniqueState:
-			result = ExecUnique((UniqueState *) node);
-			break;
-
-		case T_GatherState:
-			result = ExecGather((GatherState *) node);
-			break;
-
-		case T_HashState:
-			result = ExecHash((HashState *) node);
-			break;
-
-		case T_SetOpState:
-			result = ExecSetOp((SetOpState *) node);
-			break;
-
-		case T_LockRowsState:
-			result = ExecLockRows((LockRowsState *) node);
-			break;
-
-		case T_LimitState:
-			result = ExecLimit((LimitState *) node);
-			break;
-
-		default:
-			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));
-			result = NULL;
-			break;
-	}
-
-	if (node->instrument)
-		InstrStopNode(node->instrument, TupIsNull(result) ? 0.0 : 1.0);
-
-	return result;
+	elog(ERROR, "ExecProcNode is not supported");
+	return NULL;
 }
 
-
 /* ----------------------------------------------------------------
- *		MultiExecProcNode
- *
- *		Execute a node that doesn't return individual tuples
- *		(it might return a hashtable, bitmap, etc).  Caller should
- *		check it got back the expected kind of Node.
- *
- * This has essentially the same responsibilities as ExecProcNode,
- * but it does not do InstrStartNode/InstrStopNode (mainly because
- * it can't tell how many returned tuples to count).  Each per-node
- * function must provide its own instrumentation support.
+ * Unsupported too; we don't need it in push model
  * ----------------------------------------------------------------
  */
 Node *
 MultiExecProcNode(PlanState *node)
 {
-	Node	   *result;
-
-	CHECK_FOR_INTERRUPTS();
-
-	if (node->chgParam != NULL) /* something changed */
-		ExecReScan(node);		/* let ReScan handle this */
-
-	switch (nodeTag(node))
-	{
-			/*
-			 * Only node types that actually support multiexec will be listed
-			 */
-
-		case T_HashState:
-			result = MultiExecHash((HashState *) node);
-			break;
-
-		case T_BitmapIndexScanState:
-			result = MultiExecBitmapIndexScan((BitmapIndexScanState *) node);
-			break;
-
-		case T_BitmapAndState:
-			result = MultiExecBitmapAnd((BitmapAndState *) node);
-			break;
-
-		case T_BitmapOrState:
-			result = MultiExecBitmapOr((BitmapOrState *) node);
-			break;
-
-		default:
-			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));
-			result = NULL;
-			break;
-	}
-
-	return result;
+	elog(ERROR, "MultiExecProcNode is not supported");
+	return NULL;
 }
-
 
 /* ----------------------------------------------------------------
  *		ExecEndNode
