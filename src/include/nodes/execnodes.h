@@ -24,6 +24,7 @@
 #include "utils/sortsupport.h"
 #include "utils/tuplestore.h"
 #include "utils/tuplesort.h"
+#include "tcop/dest.h" /* for DestReceiver type in EState */
 
 
 /* ----------------
@@ -401,6 +402,16 @@ typedef struct EState
 	List	   *es_subplanstates;		/* List of PlanState for SubPlans */
 
 	List	   *es_auxmodifytables;		/* List of secondary ModifyTableStates */
+
+	/*
+	 * State needed to push tuples to dest in push model, technically it is
+	 * local variables from old ExecutePlan
+	 */
+	uint64		es_current_tuple_count;
+	bool		es_sendTuples;
+	uint64		es_numberTuplesRequested;
+	CmdType		es_operation;
+	DestReceiver *es_dest;
 
 	/*
 	 * this ExprContext is for per-output-tuple operations, such as constraint
