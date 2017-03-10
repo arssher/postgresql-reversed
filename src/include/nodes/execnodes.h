@@ -1986,6 +1986,8 @@ typedef struct HashState
 	HashJoinTable hashtable;	/* hash table for the hashjoin */
 	List	   *hashkeys;		/* list of ExprState nodes */
 	/* hashkeys is same as parent's hj_InnerHashKeys */
+	/* on the first push we must build the hashtable */
+	bool first_time_through;
 } HashState;
 
 /* ----------------

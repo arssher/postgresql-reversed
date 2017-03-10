@@ -50,17 +50,95 @@ static void ExecHashRemoveNextSkewBucket(HashJoinTable hashtable);
 
 static void *dense_alloc(HashJoinTable hashtable, Size size);
 
-/* ----------------------------------------------------------------
- *		ExecHash
- *
- *		stub for pro forma compliance
- * ----------------------------------------------------------------
+
+/* Put incoming tuples to the hastable; when NULL received, finalize building
+ * hashatable and notify HashJoin about that.
  */
-TupleTableSlot *
-ExecHash(HashState *node)
+bool
+pushTupleToHash(TupleTableSlot *slot, HashState *node)
 {
-	elog(ERROR, "Hash node does not support ExecProcNode call convention");
-	return NULL;
+	List	   *hashkeys;
+	HashJoinTable hashtable;
+	ExprContext *econtext;
+	uint32		hashvalue;
+	HashJoinState *hj_node;
+
+	hj_node = (HashJoinState *) node->ps.parent;
+
+	/* Create the hastable. In vanilla Postgres this code is in HashJoin */
+	if (node->first_time_through)
+	{
+		Assert(node->hashtable == NULL);
+
+		node->hashtable = ExecHashTableCreate((Hash *) node->ps.plan,
+											  hj_node->hj_HashOperators,
+											  HJ_FILL_INNER(hj_node));
+
+		/* must provide our own instrumentation support */
+		if (node->ps.instrument)
+			InstrStartNode(node->ps.instrument);
+
+		node->first_time_through = false;
+	}
+
+	/*
+	 * get state info from node
+	 */
+	hashtable = node->hashtable;
+
+	/*
+	 * set expression context
+	 */
+	hashkeys = node->hashkeys;
+	econtext = node->ps.ps_ExprContext;
+
+	/* NULL tuple received; let HashJoin know that the hashtable is built
+       and exit */
+	if (TupIsNull(slot))
+	{
+		/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
+		if (hashtable->nbuckets != hashtable->nbuckets_optimal)
+			ExecHashIncreaseNumBuckets(hashtable);
+
+		/* Account for the buckets in spaceUsed (reported in EXPLAIN ANALYZE) */
+		hashtable->spaceUsed += hashtable->nbuckets * sizeof(HashJoinTuple);
+		if (hashtable->spaceUsed > hashtable->spacePeak)
+			hashtable->spacePeak = hashtable->spaceUsed;
+
+		/* must provide our own instrumentation support */
+		if (node->ps.instrument)
+			InstrStopNode(node->ps.instrument, hashtable->totalTuples);
+
+		pushTuple(NULL, (PlanState *) node->ps.parent, (PlanState *) node);
+		return false;
+	}
+
+	/* We have to compute the hash value */
+	econtext->ecxt_innertuple = slot;
+	if (ExecHashGetHashValue(hashtable, econtext, hashkeys,
+							 false, hashtable->keepNulls,
+							 &hashvalue))
+	{
+		int			bucketNumber;
+
+		bucketNumber = ExecHashGetSkewBucket(hashtable, hashvalue);
+		if (bucketNumber != INVALID_SKEW_BUCKET_NO)
+		{
+			/* It's a skew tuple, so put it into that hash table */
+			ExecHashSkewTableInsert(hashtable, slot, hashvalue,
+									bucketNumber);
+			hashtable->skewTuples += 1;
+		}
+		else
+		{
+			/* Not subject to skew optimization, so insert normally */
+			ExecHashTableInsert(hashtable, slot, hashvalue);
+		}
+		hashtable->totalTuples += 1;
+	}
+
+	/* ready to accept another tuple */
+	return true;
 }
 
 /* ----------------------------------------------------------------
@@ -159,7 +237,7 @@ MultiExecHash(HashState *node)
  * ----------------------------------------------------------------
  */
 HashState *
-ExecInitHash(Hash *node, EState *estate, int eflags)
+ExecInitHash(Hash *node, EState *estate, int eflags, PlanState *parent)
 {
 	HashState  *hashstate;
 
@@ -172,8 +250,10 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	hashstate = makeNode(HashState);
 	hashstate->ps.plan = (Plan *) node;
 	hashstate->ps.state = estate;
+	hashstate->ps.parent = parent;
 	hashstate->hashtable = NULL;
 	hashstate->hashkeys = NIL;	/* will be set by parent HashJoin */
+	hashstate->first_time_through = true;
 
 	/*
 	 * Miscellaneous initialization
@@ -201,7 +281,7 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	 * initialize child nodes
 	 */
 	outerPlanState(hashstate) = ExecInitNode(outerPlan(node), estate, eflags,
-											 (PlanState*) hashstate);
+											 (PlanState *) hashstate);
 
 	/*
 	 * initialize tuple type. no need to initialize projection info because
