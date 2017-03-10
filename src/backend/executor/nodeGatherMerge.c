@@ -102,7 +102,7 @@ ExecInitGatherMerge(GatherMerge *node, EState *estate, int eflags)
 	 * now initialize outer plan
 	 */
 	outerNode = outerPlan(node);
-	outerPlanState(gm_state) = ExecInitNode(outerNode, estate, eflags);
+	outerPlanState(gm_state) = ExecInitNode(outerNode, estate, eflags, NULL);
 
 	/*
 	 * Initialize result tuple type and projection info.

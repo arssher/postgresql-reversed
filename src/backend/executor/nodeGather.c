@@ -98,7 +98,7 @@ ExecInitGather(Gather *node, EState *estate, int eflags)
 	 * now initialize outer plan
 	 */
 	outerNode = outerPlan(node);
-	outerPlanState(gatherstate) = ExecInitNode(outerNode, estate, eflags);
+	outerPlanState(gatherstate) = ExecInitNode(outerNode, estate, eflags, NULL);
 
 	/*
 	 * Initialize result tuple type and projection info.

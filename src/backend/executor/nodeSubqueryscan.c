@@ -136,7 +136,7 @@ ExecInitSubqueryScan(SubqueryScan *node, EState *estate, int eflags)
 	/*
 	 * initialize subquery
 	 */
-	subquerystate->subplan = ExecInitNode(node->subplan, estate, eflags);
+	subquerystate->subplan = ExecInitNode(node->subplan, estate, eflags, NULL);
 
 	/*
 	 * Initialize scan tuple type (needed by ExecAssignScanProjectionInfo)
