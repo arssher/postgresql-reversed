@@ -154,17 +154,17 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 												   estate, eflags, parent);
 			break;
 
-		/*
-		 * join nodes
-		 */
+			/*
+			 * join nodes
+			 */
 		case T_HashJoin:
 			result = (PlanState *) ExecInitHashJoin((HashJoin *) node,
 													estate, eflags, parent);
 			break;
 
-		/*
-		 * materialization nodes
-		 */
+			/*
+			 * materialization nodes
+			 */
 		case T_Hash:
 			result = (PlanState *) ExecInitHash((Hash *) node,
 												estate, eflags, parent);
@@ -300,16 +300,16 @@ ExecEndNode(PlanState *node)
 			ExecEndSeqScan((SeqScanState *) node);
 			break;
 
-		/*
-		 * join nodes
-		 */
+			/*
+			 * join nodes
+			 */
 		case T_HashJoinState:
 			ExecEndHashJoin((HashJoinState *) node);
 			break;
 
-		/*
-		 * materialization nodes
-		 */
+			/*
+			 * materialization nodes
+			 */
 		case T_HashState:
 			ExecEndHash((HashState *) node);
 			break;
