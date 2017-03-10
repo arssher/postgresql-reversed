@@ -169,6 +169,12 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 			result = (PlanState *) ExecInitHash((Hash *) node,
 												estate, eflags, parent);
 			break;
+
+		case T_Limit:
+			result = (PlanState *) ExecInitLimit((Limit *) node,
+												 estate, eflags, parent);
+			break;
+
 		default:
 			elog(ERROR, "unrecognized/unsupported node type: %d",
 				 (int) nodeTag(node));
@@ -244,7 +250,9 @@ pushTuple(TupleTableSlot *slot, PlanState *node, PlanState *pusher)
 	/* does push come from the outer side? */
 	push_from_outer = outerPlanState(node) == pusher;
 
-	if (nodeTag(node) == T_HashState)
+	if (nodeTag(node) == T_LimitState)
+		return pushTupleToLimit(slot, (LimitState *) node);
+	else if (nodeTag(node) == T_HashState)
 		return pushTupleToHash(slot, (HashState *) node);
 
 	else if (nodeTag(node) == T_HashJoinState && push_from_outer)
@@ -314,6 +322,10 @@ ExecEndNode(PlanState *node)
 		 */
 		case T_HashState:
 			ExecEndHash((HashState *) node);
+			break;
+
+		case T_LimitState:
+			ExecEndLimit((LimitState *) node);
 			break;
 
 		default:
