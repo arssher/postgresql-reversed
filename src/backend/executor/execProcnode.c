@@ -153,6 +153,12 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 			break;
 	}
 	return NULL;
+
+	/* Set up instrumentation for this node if requested */
+	if (estate->es_instrument)
+		result->instrument = InstrAlloc(1, estate->es_instrument);
+
+	return result;
 }
 
 
