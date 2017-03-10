@@ -146,9 +146,9 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 
 	switch (nodeTag(node))
 	{
-		/*
-		 * scan nodes
-		 */
+			/*
+			 * scan nodes
+			 */
 		case T_SeqScan:
 			result = (PlanState *) ExecInitSeqScan((SeqScan *) node,
 												   estate, eflags, parent);
@@ -293,9 +293,9 @@ ExecEndNode(PlanState *node)
 
 	switch (nodeTag(node))
 	{
-		/*
-		 * scan nodes
-		 */
+			/*
+			 * scan nodes
+			 */
 		case T_SeqScanState:
 			ExecEndSeqScan((SeqScanState *) node);
 			break;
