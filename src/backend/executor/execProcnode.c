@@ -198,7 +198,8 @@ pushTuple(TupleTableSlot *slot, PlanState *node, PlanState *pusher)
 		return SendReadyTuple(slot, pusher);
 	}
 
-	/* If pusher is NULL, then node is a bottom node, another special case:
+	/*
+	 * If pusher is NULL, then node is a bottom node, another special case:
 	 * bottom nodes obviously don't need neither tuple nor pusher
 	 */
 	if (!pusher)
