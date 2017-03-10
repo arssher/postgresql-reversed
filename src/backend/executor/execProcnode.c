@@ -136,7 +136,22 @@
 PlanState *
 ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 {
-	elog(ERROR, "unrecognized/unsupported node type: %d", (int) nodeTag(node));
+	PlanState  *result;
+
+	/*
+	 * do nothing when we get to the end of a leaf on tree.
+	 */
+	if (node == NULL)
+		return NULL;
+
+	switch (nodeTag(node))
+	{
+		default:
+			elog(ERROR, "unrecognized/unsupported node type: %d",
+				 (int) nodeTag(node));
+			result = NULL;		/* keep compiler quiet */
+			break;
+	}
 	return NULL;
 }
 
@@ -181,7 +196,20 @@ ExecEndNode(PlanState *node)
 	 */
 	if (node == NULL)
 		return;
-	elog(ERROR, "unrecognized/unsupported node type: %d", (int) nodeTag(node));
+
+	if (node->chgParam != NULL)
+	{
+		bms_free(node->chgParam);
+		node->chgParam = NULL;
+	}
+
+	switch (nodeTag(node))
+	{
+		default:
+			elog(ERROR, "unrecognized/unsupported node type: %d",
+				 (int) nodeTag(node));
+			break;
+	}
 }
 
 /*
