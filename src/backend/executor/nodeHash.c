@@ -50,17 +50,99 @@ static void ExecHashRemoveNextSkewBucket(HashJoinTable hashtable);
 
 static void *dense_alloc(HashJoinTable hashtable, Size size);
 
-/* ----------------------------------------------------------------
- *		ExecHash
- *
- *		stub for pro forma compliance
- * ----------------------------------------------------------------
+
+/*
+ * Put incoming tuples to the hastable.
  */
-TupleTableSlot *
-ExecHash(HashState *node)
+bool
+ExecPushTupleToHash(TupleTableSlot *slot, HashState *node)
 {
-	elog(ERROR, "Hash node does not support ExecProcNode call convention");
-	return NULL;
+	List	   *hashkeys;
+	HashJoinTable hashtable;
+	ExprContext *econtext;
+	uint32		hashvalue;
+	HashJoinState *hj_node;
+
+	hj_node = (HashJoinState *) node->ps.parent;
+
+	/* Create the hastable. In vanilla Postgres this code is in HashJoin */
+	if (node->first_time_through)
+	{
+		Assert(node->hashtable == NULL);
+
+		node->hashtable = ExecHashTableCreate((Hash *) node->ps.plan,
+											  hj_node->hj_HashOperators,
+											  HJ_FILL_INNER(hj_node));
+
+		/* must provide our own instrumentation support */
+		if (node->ps.instrument)
+			InstrStartNode(node->ps.instrument);
+
+		node->first_time_through = false;
+	}
+
+	/*
+	 * get state info from node
+	 */
+	hashtable = node->hashtable;
+
+	/*
+	 * set expression context
+	 */
+	hashkeys = node->hashkeys;
+	econtext = node->ps.ps_ExprContext;
+
+	/* We have to compute the hash value */
+	econtext->ecxt_innertuple = slot;
+	if (ExecHashGetHashValue(hashtable, econtext, hashkeys,
+							 false, hashtable->keepNulls,
+							 &hashvalue))
+	{
+		int			bucketNumber;
+
+		bucketNumber = ExecHashGetSkewBucket(hashtable, hashvalue);
+		if (bucketNumber != INVALID_SKEW_BUCKET_NO)
+		{
+			/* It's a skew tuple, so put it into that hash table */
+			ExecHashSkewTableInsert(hashtable, slot, hashvalue,
+									bucketNumber);
+			hashtable->skewTuples += 1;
+		}
+		else
+		{
+			/* Not subject to skew optimization, so insert normally */
+			ExecHashTableInsert(hashtable, slot, hashvalue);
+		}
+		hashtable->totalTuples += 1;
+	}
+
+	/* ready to accept another tuple */
+	return true;
+}
+
+/*
+ * NULL received, finalize building the hashatable and notify HashJoin about
+ * that.
+ */
+void
+ExecPushNullToHash(TupleTableSlot *slot, HashState *node)
+{
+	HashJoinTable hashtable = node->hashtable;
+
+	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
+	if (hashtable->nbuckets != hashtable->nbuckets_optimal)
+		ExecHashIncreaseNumBuckets(hashtable);
+
+	/* Account for the buckets in spaceUsed (reported in EXPLAIN ANALYZE) */
+	hashtable->spaceUsed += hashtable->nbuckets * sizeof(HashJoinTuple);
+	if (hashtable->spaceUsed > hashtable->spacePeak)
+		hashtable->spacePeak = hashtable->spaceUsed;
+
+	/* must provide our own instrumentation support */
+	if (node->ps.instrument)
+		InstrStopNode(node->ps.instrument, hashtable->totalTuples);
+
+	ExecPushNull(slot, ((PlanState *) node));
 }
 
 /* ----------------------------------------------------------------
@@ -159,7 +241,7 @@ MultiExecHash(HashState *node)
  * ----------------------------------------------------------------
  */
 HashState *
-ExecInitHash(Hash *node, EState *estate, int eflags)
+ExecInitHash(Hash *node, EState *estate, int eflags, PlanState *parent)
 {
 	HashState  *hashstate;
 
@@ -172,8 +254,10 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	hashstate = makeNode(HashState);
 	hashstate->ps.plan = (Plan *) node;
 	hashstate->ps.state = estate;
+	hashstate->ps.parent = parent;
 	hashstate->hashtable = NULL;
 	hashstate->hashkeys = NIL;	/* will be set by parent HashJoin */
+	hashstate->first_time_through = true;
 
 	/*
 	 * Miscellaneous initialization
@@ -201,7 +285,7 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	 * initialize child nodes
 	 */
 	outerPlanState(hashstate) = ExecInitNode(outerPlan(node), estate, eflags,
-											 (PlanState*) hashstate);
+											 (PlanState *) hashstate);
 
 	/*
 	 * initialize tuple type. no need to initialize projection info because
@@ -1051,34 +1135,35 @@ ExecHashGetBucketAndBatch(HashJoinTable hashtable,
 }
 
 /*
- * ExecScanHashBucket
- *		scan a hash bucket for matches to the current outer tuple
+ * ExecScanHashBucketAndPush
+ *		scan a hash bucket for matches to the current outer tuple and push
+ *		them
  *
  * The current outer tuple must be stored in econtext->ecxt_outertuple.
  *
- * On success, the inner tuple is stored into hjstate->hj_CurTuple and
- * econtext->ecxt_innertuple, using hjstate->hj_HashTupleSlot as the slot
- * for the latter.
+ * Returns true, if parent still accepts tuples, false otherwise.
  */
 bool
-ExecScanHashBucket(HashJoinState *hjstate,
-				   ExprContext *econtext)
+ExecScanHashBucketAndPush(HashJoinState *hjstate,
+						  ExprContext *econtext)
 {
 	List	   *hjclauses = hjstate->hashclauses;
 	HashJoinTable hashtable = hjstate->hj_HashTable;
-	HashJoinTuple hashTuple = hjstate->hj_CurTuple;
+	HashJoinTuple hashTuple;
 	uint32		hashvalue = hjstate->hj_CurHashValue;
+	JoinType	jointype = hjstate->js.jointype;
 
 	/*
-	 * hj_CurTuple is the address of the tuple last returned from the current
-	 * bucket, or NULL if it's time to start scanning a new bucket.
-	 *
+	 * For now, we don't support pausing execution; we either push all matching
+	 * tuples from the bucket at once or don't touch it at all.
+	 */
+	Assert(hjstate->hj_CurTuple == NULL);
+
+	/*
 	 * If the tuple hashed to a skew bucket then scan the skew bucket
 	 * otherwise scan the standard hashtable bucket.
 	 */
-	if (hashTuple != NULL)
-		hashTuple = hashTuple->next;
-	else if (hjstate->hj_CurSkewBucketNo != INVALID_SKEW_BUCKET_NO)
+	if (hjstate->hj_CurSkewBucketNo != INVALID_SKEW_BUCKET_NO)
 		hashTuple = hashtable->skewBucket[hjstate->hj_CurSkewBucketNo]->tuples;
 	else
 		hashTuple = hashtable->buckets[hjstate->hj_CurBucketNo];
@@ -1101,17 +1186,21 @@ ExecScanHashBucket(HashJoinState *hjstate,
 			if (ExecQual(hjclauses, econtext, false))
 			{
 				hjstate->hj_CurTuple = hashTuple;
-				return true;
+
+				if (!CheckJoinQualAndPush(hjstate))
+					return false;
+
+				/* if in anti or semi join tuple matched we are done with it */
+				if (hjstate->hj_MatchedOuter &&
+					(jointype == JOIN_ANTI || jointype == JOIN_SEMI))
+					return true;
 			}
 		}
 
 		hashTuple = hashTuple->next;
 	}
 
-	/*
-	 * no match
-	 */
-	return false;
+	return true;
 }
 
 /*
@@ -1135,18 +1224,23 @@ ExecPrepHashTableForUnmatched(HashJoinState *hjstate)
 }
 
 /*
- * ExecScanHashTableForUnmatched
- *		scan the hash table for unmatched inner tuples
+ * ExecScanHashTableForUnmatchedAndPush
+ *		scan the hash table for unmatched inner tuples and push them
  *
- * On success, the inner tuple is stored into hjstate->hj_CurTuple and
- * econtext->ecxt_innertuple, using hjstate->hj_HashTupleSlot as the slot
- * for the latter.
+ * Returns true, if parent still accepts tuples, false otherwise
  */
 bool
-ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
+ExecScanHashTableForUnmatchedAndPush(HashJoinState *hjstate,
+									 ExprContext *econtext)
 {
 	HashJoinTable hashtable = hjstate->hj_HashTable;
-	HashJoinTuple hashTuple = hjstate->hj_CurTuple;
+	HashJoinTuple hashTuple = NULL;
+	bool parent_accepts_tuples = true;
+
+	/*
+	 * For now, we don't support pausing execution and don't enter here twice
+	 */
+	Assert(hjstate->hj_CurTuple == NULL);
 
 	for (;;)
 	{
@@ -1191,18 +1285,25 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 				 */
 				ResetExprContext(econtext);
 
+				/*
+				 * Since right now we don't support pausing execution anyway,
+				 * it is probably unnecessary.
+				 */
 				hjstate->hj_CurTuple = hashTuple;
-				return true;
+
+				/*
+				 * Generate a fake join tuple with nulls for the outer tuple,
+				 * and return it if it passes the non-join quals.
+				 */
+				econtext->ecxt_outertuple = hjstate->hj_NullOuterTupleSlot;
+				parent_accepts_tuples = CheckOtherQualAndPush(hjstate);
 			}
 
 			hashTuple = hashTuple->next;
 		}
 	}
 
-	/*
-	 * no more unmatched tuples
-	 */
-	return false;
+	return parent_accepts_tuples;
 }
 
 /*

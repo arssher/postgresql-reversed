@@ -181,6 +181,22 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 			result = (PlanState *) ExecInitSeqScan((SeqScan *) node,
 												   estate, eflags, parent);
 			break;
+
+		/*
+		 * join nodes
+		 */
+		case T_HashJoin:
+			result = (PlanState *) ExecInitHashJoin((HashJoin *) node,
+													estate, eflags, parent);
+			break;
+
+		/*
+		 * materialization nodes
+		 */
+		case T_Hash:
+			result = (PlanState *) ExecInitHash((Hash *) node,
+												estate, eflags, parent);
+			break;
 		default:
 			elog(ERROR, "unrecognized/unsupported node type: %d",
 				 (int) nodeTag(node));
@@ -244,6 +260,7 @@ bool
 ExecPushTuple(TupleTableSlot *slot, PlanState *pusher)
 {
 	PlanState *receiver = pusher->parent;
+	bool push_from_outer;
 
 	Assert(!TupIsNull(slot));
 
@@ -256,6 +273,16 @@ ExecPushTuple(TupleTableSlot *slot, PlanState *pusher)
 	{
 		return SendReadyTuple(slot, pusher);
 	}
+
+	if (nodeTag(receiver) == T_HashState)
+		return ExecPushTupleToHash(slot, (HashState *) receiver);
+
+	/* does push come from the outer side? */
+	push_from_outer = outerPlanState(receiver) == pusher;
+
+	if (nodeTag(receiver) == T_HashJoinState && push_from_outer)
+		return ExecPushTupleToHashJoinFromOuter(slot,
+											   (HashJoinState *) receiver);
 
 	elog(ERROR, "node type not supported: %d", (int) nodeTag(receiver));
 }
@@ -271,6 +298,7 @@ void
 ExecPushNull(TupleTableSlot *slot, PlanState *pusher)
 {
 	PlanState *receiver = pusher->parent;
+	bool push_from_outer;
 
 	Assert(TupIsNull(slot));
 
@@ -285,6 +313,20 @@ ExecPushNull(TupleTableSlot *slot, PlanState *pusher)
 		SendReadyTuple(slot, pusher);
 		return;
 	}
+
+	if (nodeTag(receiver) == T_HashState)
+		return ExecPushNullToHash(slot, (HashState *) receiver);
+
+	/* does push come from the outer side? */
+	push_from_outer = outerPlanState(receiver) == pusher;
+
+	if (nodeTag(receiver) == T_HashJoinState && push_from_outer)
+		return ExecPushNullToHashJoinFromOuter(slot,
+											   (HashJoinState *) receiver);
+
+	else if (nodeTag(receiver) == T_HashJoinState && !push_from_outer)
+		return ExecPushNullToHashJoinFromInner(slot,
+											   (HashJoinState *) receiver);
 
 	elog(ERROR, "node type not supported: %d", (int) nodeTag(receiver));
 }
@@ -333,6 +375,20 @@ ExecEndNode(PlanState *node)
 		 */
 		case T_SeqScanState:
 			ExecEndSeqScan((SeqScanState *) node);
+			break;
+
+		/*
+		 * join nodes
+		 */
+		case T_HashJoinState:
+			ExecEndHashJoin((HashJoinState *) node);
+			break;
+
+		/*
+		 * materialization nodes
+		 */
+		case T_HashState:
+			ExecEndHash((HashState *) node);
 			break;
 
 		default:

@@ -16,8 +16,10 @@
 
 #include "nodes/execnodes.h"
 
-extern HashState *ExecInitHash(Hash *node, EState *estate, int eflags);
-extern TupleTableSlot *ExecHash(HashState *node);
+extern HashState *ExecInitHash(Hash *node, EState *estate, int eflags,
+							   PlanState* parent);
+extern bool ExecPushTupleToHash(TupleTableSlot *slot, HashState *node);
+extern void ExecPushNullToHash(TupleTableSlot *slot, HashState *node);
 extern Node *MultiExecHash(HashState *node);
 extern void ExecEndHash(HashState *node);
 extern void ExecReScanHash(HashState *node);
@@ -38,9 +40,10 @@ extern void ExecHashGetBucketAndBatch(HashJoinTable hashtable,
 						  uint32 hashvalue,
 						  int *bucketno,
 						  int *batchno);
-extern bool ExecScanHashBucket(HashJoinState *hjstate, ExprContext *econtext);
+extern bool ExecScanHashBucketAndPush(HashJoinState *hjstate,
+									  ExprContext *econtext);
 extern void ExecPrepHashTableForUnmatched(HashJoinState *hjstate);
-extern bool ExecScanHashTableForUnmatched(HashJoinState *hjstate,
+extern bool ExecScanHashTableForUnmatchedAndPush(HashJoinState *hjstate,
 							  ExprContext *econtext);
 extern void ExecHashTableReset(HashJoinTable hashtable);
 extern void ExecHashTableResetMatchFlags(HashJoinTable hashtable);
