@@ -73,6 +73,8 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/tqual.h"
+#include "executor/executor.h"
+#include "executor/nodeSeqscan.h"
 
 
 /* GUC variable */
@@ -9234,5 +9236,259 @@ heap_mask(char *pagedata, BlockNumber blkno)
 			if (padlen > 0)
 				memset(page_item + len, MASK_MARKER, padlen);
 		}
+	}
+}
+
+/* ----------------
+ * Fetch tuples, check quals and push them. Modified heapgettup_pagemode,
+ * a lot of copy-pasting.
+ * This function in fact doesn't care about pusher type and func,
+ * although SeqScanState and inlined SeqPushHeapTuple is hardcoded for now
+ * ----------------
+ */
+void
+heappushtups(HeapScanDesc scan,
+			 ScanDirection dir,
+			 int nkeys,
+			 ScanKey key,
+			 PlanState *node,
+			 SeqScanState *pusher)
+{
+	HeapTuple	tuple = &(scan->rs_ctup);
+	bool		backward = ScanDirectionIsBackward(dir);
+	BlockNumber page;
+	bool		finished;
+	Page		dp;
+	int			lines;
+	int			lineindex;
+	OffsetNumber lineoff;
+	int			linesleft;
+	ItemId		lpp;
+
+	/* no movement is not supported for now */
+	Assert(!ScanDirectionIsNoMovement(dir));
+
+	/*
+	 * calculate next starting lineindex, given scan direction
+	 */
+	if (ScanDirectionIsForward(dir))
+	{
+		if (!scan->rs_inited)
+		{
+			/*
+			 * return null immediately if relation is empty
+			 */
+			if (scan->rs_nblocks == 0 || scan->rs_numblocks == 0)
+			{
+				Assert(!BufferIsValid(scan->rs_cbuf));
+				tuple->t_data = NULL;
+				SeqPushHeapTuple(&(scan->rs_ctup), node, pusher);
+				return;
+			}
+			if (scan->rs_parallel != NULL)
+			{
+				page = heap_parallelscan_nextpage(scan);
+
+				/* Other processes might have already finished the scan. */
+				if (page == InvalidBlockNumber)
+				{
+					Assert(!BufferIsValid(scan->rs_cbuf));
+					tuple->t_data = NULL;
+					SeqPushHeapTuple(&(scan->rs_ctup), node, pusher);
+					return;
+				}
+			}
+			else
+				page = scan->rs_startblock;		/* first page */
+			heapgetpage(scan, page);
+			lineindex = 0;
+			scan->rs_inited = true;
+		}
+		else
+		{
+			/* continue from previously returned page/tuple */
+			page = scan->rs_cblock;		/* current page */
+			lineindex = scan->rs_cindex + 1;
+		}
+
+		dp = BufferGetPage(scan->rs_cbuf);
+		TestForOldSnapshot(scan->rs_snapshot, scan->rs_rd, dp);
+		lines = scan->rs_ntuples;
+		/* page and lineindex now reference the next visible tid */
+
+		linesleft = lines - lineindex;
+	}
+	else /* backward */
+	{
+		/* backward parallel scan not supported */
+		Assert(scan->rs_parallel == NULL);
+
+		if (!scan->rs_inited)
+		{
+			/*
+			 * return null immediately if relation is empty
+			 */
+			if (scan->rs_nblocks == 0 || scan->rs_numblocks == 0)
+			{
+				Assert(!BufferIsValid(scan->rs_cbuf));
+				tuple->t_data = NULL;
+				SeqPushHeapTuple(&(scan->rs_ctup), node, pusher);
+				return;
+			}
+
+			/*
+			 * Disable reporting to syncscan logic in a backwards scan; it's
+			 * not very likely anyone else is doing the same thing at the same
+			 * time, and much more likely that we'll just bollix things for
+			 * forward scanners.
+			 */
+			scan->rs_syncscan = false;
+			/* start from last page of the scan */
+			if (scan->rs_startblock > 0)
+				page = scan->rs_startblock - 1;
+			else
+				page = scan->rs_nblocks - 1;
+			heapgetpage(scan, page);
+		}
+		else
+		{
+			/* continue from previously returned page/tuple */
+			page = scan->rs_cblock;		/* current page */
+		}
+
+		dp = BufferGetPage(scan->rs_cbuf);
+		TestForOldSnapshot(scan->rs_snapshot, scan->rs_rd, dp);
+		lines = scan->rs_ntuples;
+
+		if (!scan->rs_inited)
+		{
+			lineindex = lines - 1;
+			scan->rs_inited = true;
+		}
+		else
+		{
+			lineindex = scan->rs_cindex - 1;
+		}
+		/* page and lineindex now reference the previous visible tid */
+
+		linesleft = lineindex + 1;
+	}
+
+	/*
+	 * advance the scan until we find a qualifying tuple or run out of stuff
+	 * to scan
+	 */
+	for (;;)
+	{
+		while (linesleft > 0)
+		{
+			bool tuple_qualifies = false;
+
+			lineoff = scan->rs_vistuples[lineindex];
+			lpp = PageGetItemId(dp, lineoff);
+			Assert(ItemIdIsNormal(lpp));
+
+			tuple->t_data = (HeapTupleHeader) PageGetItem((Page) dp, lpp);
+			tuple->t_len = ItemIdGetLength(lpp);
+			ItemPointerSet(&(tuple->t_self), page, lineoff);
+
+			/*
+			 * if current tuple qualifies, push it.
+			 */
+			if (key != NULL)
+			{
+				HeapKeyTest(tuple, RelationGetDescr(scan->rs_rd),
+							nkeys, key, tuple_qualifies);
+			}
+			else
+			{
+				tuple_qualifies = true;
+			}
+
+			if (tuple_qualifies)
+			{
+				/* Push tuple */
+				scan->rs_cindex = lineindex;
+				pgstat_count_heap_getnext(scan->rs_rd);
+				if (!SeqPushHeapTuple(&(scan->rs_ctup), node, pusher))
+					return;
+			}
+
+			/*
+			 * and carry on to the next one anyway
+			 */
+			--linesleft;
+			if (backward)
+				--lineindex;
+			else
+				++lineindex;
+		}
+
+		/*
+		 * if we get here, it means we've exhausted the items on this page and
+		 * it's time to move to the next.
+		 */
+		if (backward)
+		{
+			finished = (page == scan->rs_startblock) ||
+				(scan->rs_numblocks != InvalidBlockNumber ? --scan->rs_numblocks == 0 : false);
+			if (page == 0)
+				page = scan->rs_nblocks;
+			page--;
+		}
+		else if (scan->rs_parallel != NULL)
+		{
+			page = heap_parallelscan_nextpage(scan);
+			finished = (page == InvalidBlockNumber);
+		}
+		else
+		{
+			page++;
+			if (page >= scan->rs_nblocks)
+				page = 0;
+			finished = (page == scan->rs_startblock) ||
+				(scan->rs_numblocks != InvalidBlockNumber ? --scan->rs_numblocks == 0 : false);
+
+			/*
+			 * Report our new scan position for synchronization purposes. We
+			 * don't do that when moving backwards, however. That would just
+			 * mess up any other forward-moving scanners.
+			 *
+			 * Note: we do this before checking for end of scan so that the
+			 * final state of the position hint is back at the start of the
+			 * rel.  That's not strictly necessary, but otherwise when you run
+			 * the same query multiple times the starting position would shift
+			 * a little bit backwards on every invocation, which is confusing.
+			 * We don't guarantee any specific ordering in general, though.
+			 */
+			if (scan->rs_syncscan)
+				ss_report_location(scan->rs_rd, page);
+		}
+
+		/*
+		 * return NULL if we've exhausted all the pages
+		 */
+		if (finished)
+		{
+			if (BufferIsValid(scan->rs_cbuf))
+				ReleaseBuffer(scan->rs_cbuf);
+			scan->rs_cbuf = InvalidBuffer;
+			scan->rs_cblock = InvalidBlockNumber;
+			tuple->t_data = NULL;
+			scan->rs_inited = false;
+			SeqPushHeapTuple(&(scan->rs_ctup), node, pusher);
+			return;
+		}
+
+		heapgetpage(scan, page);
+
+		dp = BufferGetPage(scan->rs_cbuf);
+		TestForOldSnapshot(scan->rs_snapshot, scan->rs_rd, dp);
+		lines = scan->rs_ntuples;
+		linesleft = lines;
+		if (backward)
+			lineindex = lines - 1;
+		else
+			lineindex = 0;
 	}
 }

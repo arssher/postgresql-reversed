@@ -22,6 +22,7 @@
 #include "storage/lockdefs.h"
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
+#include "nodes/execnodes.h"
 
 
 /* "options" flag bits for heap_insert */
@@ -126,6 +127,15 @@ extern void heap_rescan_set_params(HeapScanDesc scan, ScanKey key,
 					 bool allow_strat, bool allow_sync, bool allow_pagemode);
 extern void heap_endscan(HeapScanDesc scan);
 extern HeapTuple heap_getnext(HeapScanDesc scan, ScanDirection direction);
+/* forward decls because now heapam.h and execnodes.h include each other */
+typedef struct PlanState PlanState;
+typedef struct SeqScanState SeqScanState;
+extern void heappushtups(HeapScanDesc scan,
+						 ScanDirection dir,
+						 int nkeys,
+						 ScanKey key,
+						 PlanState *node,
+						 SeqScanState *pusher);
 
 extern Size heap_parallelscan_estimate(Snapshot snapshot);
 extern void heap_parallelscan_initialize(ParallelHeapScanDesc target,
