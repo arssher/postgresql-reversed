@@ -146,6 +146,13 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 
 	switch (nodeTag(node))
 	{
+			/*
+			 * scan nodes
+			 */
+		case T_SeqScan:
+			result = (PlanState *) ExecInitSeqScan((SeqScan *) node,
+												   estate, eflags, parent);
+			break;
 		default:
 			elog(ERROR, "unrecognized/unsupported node type: %d",
 				 (int) nodeTag(node));
@@ -206,6 +213,9 @@ pushTuple(TupleTableSlot *slot, PlanState *node, PlanState *pusher)
 	{
 		switch (nodeTag(node))
 		{
+			case T_SeqScanState:
+				return pushTupleToSeqScan((SeqScanState *) node);
+
 			default:
 				elog(ERROR, "bottom node type not supported: %d",
 					 (int) nodeTag(node));
@@ -258,6 +268,13 @@ ExecEndNode(PlanState *node)
 
 	switch (nodeTag(node))
 	{
+			/*
+			 * scan nodes
+			 */
+		case T_SeqScanState:
+			ExecEndSeqScan((SeqScanState *) node);
+			break;
+
 		default:
 			elog(ERROR, "unrecognized/unsupported node type: %d",
 				 (int) nodeTag(node));

@@ -1256,6 +1256,8 @@ typedef struct BitmapOrState
  *		ScanTupleSlot	   pointer to slot in tuple table holding scan tuple
  * ----------------
  */
+/* Forward decl, because now heapam.h requires execnodes.h. Disgusting. */
+typedef struct HeapScanDescData *HeapScanDesc;
 typedef struct ScanState
 {
 	PlanState	ps;				/* its first field is NodeTag */

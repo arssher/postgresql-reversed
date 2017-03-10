@@ -17,8 +17,9 @@
 #include "access/parallel.h"
 #include "nodes/execnodes.h"
 
-extern SeqScanState *ExecInitSeqScan(SeqScan *node, EState *estate, int eflags);
-extern TupleTableSlot *ExecSeqScan(SeqScanState *node);
+extern SeqScanState *ExecInitSeqScan(SeqScan *node, EState *estate, int eflags,
+									 PlanState *parent);
+extern bool pushTupleToSeqScan(SeqScanState *node);
 extern void ExecEndSeqScan(SeqScanState *node);
 extern void ExecReScanSeqScan(SeqScanState *node);
 
