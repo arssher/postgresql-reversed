@@ -3,6 +3,51 @@ src/backend/executor/README
 The Postgres Executor
 =====================
 
+This is an attempt to implement proof concept of executor with push-based
+achitecture like in [1]. We will call it 'reversed' executor. Right now we will
+not support both reversed and original executor, because it would involve a lot
+of either code copy-pasting (or time to avoid it), while our current goal is
+just to implement working proof of concept to estimate the benefits.
+
+Since this is a huge change, we need to outline the general strategy, things
+we will start with and how we will deal with the old code, remembering that we
+will reuse a great deal of it.
+
+Key points:
+* ExecProcNode is now a stub. All nodes code (ExecSomeNode, etc) is
+  unreachable. However, we leave it to avoid 19k lines removal commit and to
+  produce more useful diffs later; a lot of code will be reused.
+* Base for implementing push model, common for all nodes, is in execMain.c and
+  execProcNode.c. We will substitute execProcNode with pushTuple, it's interface
+  described in the comment to the definition, and this is the only change to the
+  node's interface. We make necessary changes to execMain.c, namely to
+  ExecutorRun, to run nodes in proper order from the below.
+* Then we are ready to implement the nodes one by one.
+
+At first,
+* parallel execution will not be supported.
+* subplans will not be supported.
+* we will not support ExecReScan too for now.
+* only CMD_SELECT operation will be supported.
+* only forward direction will be supported.
+* we will not support set returning functions either.
+
+In general, we try to treat the old code as follows:
+* As said above, leave it even if it dead for now.
+* If is not dead, but not yet updated for reversed executor, remove it.
+  Example is contents of ExecInitNode.
+* Sometimes we need to make minimal changes to some existing function, but these
+  changes will make it incompatible with existing code which is not yet
+  reworked.  In that case, to avoid deleting a lot of code we will just
+  copypaste it until some more generic solution will be provided. Example is
+  heapgettup_pagemode and it's 'reversed' analogue added for seqscan.
+
+
+[1] Efficiently Compiling Efficient Query Plans for Modern Hardware,
+    http://www.vldb.org/pvldb/vol4/p539-neumann.pdf
+
+Below goes the original README text.
+
 The executor processes a tree of "plan nodes".  The plan tree is essentially
 a demand-pull pipeline of tuple processing operations.  Each node, when
 called, will produce the next tuple in its output sequence, or NULL if no
