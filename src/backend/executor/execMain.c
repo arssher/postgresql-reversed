@@ -2857,7 +2857,6 @@ SendReadyTuple(TupleTableSlot *slot, PlanState *planstate)
 		estate->es_numberTuplesRequested == estate->es_current_tuple_count)
 		return false;
 
-	/* Should we do it here? */
 	ResetPerTupleExprContext(estate);
 	return true;
 }
