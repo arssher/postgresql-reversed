@@ -180,6 +180,7 @@ extern void ExecutorRun(QueryDesc *queryDesc,
 			ScanDirection direction, uint64 count, bool execute_once);
 extern void standard_ExecutorRun(QueryDesc *queryDesc,
 					 ScanDirection direction, uint64 count, bool execute_once);
+extern bool SendReadyTuple(TupleTableSlot *slot, PlanState *planstate);
 extern void ExecutorFinish(QueryDesc *queryDesc);
 extern void standard_ExecutorFinish(QueryDesc *queryDesc);
 extern void ExecutorEnd(QueryDesc *queryDesc);
@@ -241,6 +242,9 @@ extern TupleTableSlot *ExecProcNode(PlanState *node);
 extern Node *MultiExecProcNode(PlanState *node);
 extern void ExecEndNode(PlanState *node);
 extern bool ExecShutdownNode(PlanState *node);
+extern void ExecLeaf(PlanState *node);
+extern bool ExecPushTuple(TupleTableSlot *slot, PlanState *pusher);
+extern void ExecPushNull(TupleTableSlot *slot, PlanState *pusher);
 
 /*
  * prototypes from functions in execQual.c

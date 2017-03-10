@@ -2,10 +2,10 @@
  *
  * execProcnode.c
  *	 contains dispatch functions which call the appropriate "initialize",
- *	 "get a tuple", and "cleanup" routines for the given node type.
- *	 If the node has children, then it will presumably call ExecInitNode,
- *	 ExecProcNode, or ExecEndNode on its subnodes and do the appropriate
- *	 processing.
+ *	 "push a tuple", and "cleanup" routines for the given node type.
+ *	 If the node has children, then it will presumably call ExecInitNode
+ *	 and ExecEndNode on its subnodes and ExecPushTuple to push processed tuple
+ *	 to its parent.
  *
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -19,16 +19,18 @@
 /*
  *	 INTERFACE ROUTINES
  *		ExecInitNode	-		initialize a plan node and its subplans
- *		ExecProcNode	-		get a tuple by executing the plan node
+ *		ExecLeaf		-		start execution of the leaf
+ *		ExecPushTuple	-		push tuple to the parent node
+ *		ExecPushNull	-		let parent know that we are done
  *		ExecEndNode		-		shut down a plan node and its subplans
  *
  *	 NOTES
- *		This used to be three files.  It is now all combined into
- *		one file so that it is easier to keep ExecInitNode, ExecProcNode,
- *		and ExecEndNode in sync when new nodes are added.
+ *		This used to be three files. It is now all combined into
+ *		one file so that it is easier to keep ExecInitNode, ExecLeaf,
+ *		ExecPushTuple, ExecPushNull and ExecEndNode in sync when new nodes
+ *		are added.
  *
- *	 EXAMPLE
- *		Suppose we want the age of the manager of the shoe department and
+ *	 EXAMPLE Suppose we want the age of the manager of the shoe department and
  *		the number of employees in that department.  So we have the query:
  *
  *				select DEPT.no_emps, EMP.age
@@ -56,24 +58,47 @@
  *		of ExecInitNode() is a plan state tree built with the same structure
  *		as the underlying plan tree.
  *
- *	  * Then when ExecutorRun() is called, it calls ExecutePlan() which calls
- *		ExecProcNode() repeatedly on the top node of the plan state tree.
- *		Each time this happens, ExecProcNode() will end up calling
- *		ExecNestLoop(), which calls ExecProcNode() on its subplans.
- *		Each of these subplans is a sequential scan so ExecSeqScan() is
- *		called.  The slots returned by ExecSeqScan() may contain
- *		tuples which contain the attributes ExecNestLoop() uses to
- *		form the tuples it returns.
+ *	  * Then when ExecutorRun() is called, it calls ExecLeaf on each leaf of
+ *		the plan state with inner leafs first, outer second. So, in this case
+ *		it will call it on DEPT SeqScan, and then on EMP SeqScan. ExecLeaf
+ *		chooses the corresponding implementation -- here it is ExecSeqScan,
+ *		sequential scan. ExecSeqScan retrieves tuples and for each of them it
+ *		calls ExecPushTuple to pass tuple to nodeSeqScan's parent, Nest Loop
+ *		in this case. ExecPushTuple resolves the call, i.e. it finds something
+ *		like ExecPushTupleToNestLoopFromOuter and calls it. Then the process
+ *		repeats, so ExecPushTuple is called recursively. We have two corner
+ *		cases:
  *
- *	  * Eventually ExecSeqScan() stops returning tuples and the nest
- *		loop join ends.  Lastly, ExecutorEnd() calls ExecEndNode() which
+ *		1) When node have nothing more to push, e.g. nodeSeqScan have
+ *		   scanned all the tuples. Then it calls ExecPushNull once to let its
+ *		   parent know that nodeSeqScan have finished its work.
+ *		2) When node has no parent (top-level node). In this case
+ *		   ExecPushTuple calls SendReadyTuple which sends the tuple to its
+ *		   final destination.
+ *
+ *		So, in our example DEPT ExecSeqScan will eventually call ExecPushNull,
+ *		so Nest Loop node will learn that its inner side is done. Then EMP
+ *		SeqScan will start pushing, and inside EMP Seqscan's ExecPushTuple
+ *		Nested Loop will match the tuples and push them to the final
+ *		destination. Eventually EMP Seqscan will call ExecPushNull, inside it
+ *		Nested Loop will call ExecPushNull too and the nest loop join ends.
+ *
+ *		ExecPushTuple returns bool value which tells whether parent still
+ *		accepts the tuples. It allows to stop execution in the middle; e.g. if
+ *		we have node Limit above SeqScan node, the latter needs to scan only
+ *		LIMIT tuples. We don't push anything after receiving false from
+ *		ExecPushTuple; obviously, even if we have pushed all the tuples and
+ *		the last ExecPushTuple call returned false, we don't call
+ *		ExecPushNull.
+ *
+ *		Lastly, ExecutorEnd() calls ExecEndNode() which
  *		calls ExecEndNestLoop() which in turn calls ExecEndNode() on
  *		its subplans which result in ExecEndSeqScan().
  *
- *		This should show how the executor works by having
- *		ExecInitNode(), ExecProcNode() and ExecEndNode() dispatch
- *		their work to the appropriate node support routines which may
- *		in turn call these routines themselves on their subplans.
+ *		This should show how the executor works by having ExecInitNode(),
+ *		ExecLeaf, ExecPushTuple, ExecPushNull and ExecEndNode() dispatch their
+ *		work to the appropriate node support routines which may in turn call
+ *		these routines themselves on their subplans.
  */
 #include "postgres.h"
 
@@ -171,6 +196,85 @@ ExecProcNode(PlanState *node)
 {
 	elog(ERROR, "ExecProcNode is not supported");
 	return NULL;
+}
+
+/*
+ * Tell the 'node' leaf to start the execution
+ */
+void
+ExecLeaf(PlanState *node)
+{
+	CHECK_FOR_INTERRUPTS();
+
+	switch (nodeTag(node))
+	{
+		default:
+			elog(ERROR, "bottom node type not supported: %d",
+				 (int) nodeTag(node));
+	}
+}
+
+/*
+ * Instead of ExecProcNode, here we will have function ExecPushTuple pushing
+ * one tuple.
+ * 'slot' is tuple to push, it must be not null; when node finished its work
+ * it must call ExecPushNull instead.
+ * 'pusher' is sender of a tuple, it's parent is the receiver. We take it as a
+ * param instead of its parent directly because we need it to distinguish
+ * inner and outer pushes.
+ *
+ * Returns true if node is still accepting tuples, false if not.
+ *
+ * If tuple was pushed into a node which returned 'false' before, the
+ * behaviour is undefined, i.e. it is not allowed; we will try to catch such
+ * situations with asserts.
+ */
+bool
+ExecPushTuple(TupleTableSlot *slot, PlanState *pusher)
+{
+	PlanState *receiver = pusher->parent;
+
+	Assert(!TupIsNull(slot));
+
+	CHECK_FOR_INTERRUPTS();
+
+	/* If the receiver is NULL, then pusher is top-level node, so we need
+	 * to send the tuple to the dest
+	 */
+	if (receiver == NULL)
+	{
+		return SendReadyTuple(slot, pusher);
+	}
+
+	elog(ERROR, "node type not supported: %d", (int) nodeTag(receiver));
+}
+
+/*
+ * Signal the parent that we are done. Like in ExecPushTuple, sender is param
+ * here because we need to distinguish inner and outer pushes.
+ *
+ * 'slot' must be null tuple. It exists to be able to transfer correct
+ * tupleDesc.
+ */
+void
+ExecPushNull(TupleTableSlot *slot, PlanState *pusher)
+{
+	PlanState *receiver = pusher->parent;
+
+	Assert(TupIsNull(slot));
+
+	CHECK_FOR_INTERRUPTS();
+
+	/*
+	 * If the receiver is NULL, then pusher is top-level node; end of
+	 * the execution
+	 */
+	if (receiver == NULL)
+	{
+		SendReadyTuple(NULL, pusher);
+	}
+
+	elog(ERROR, "node type not supported: %d", (int) nodeTag(receiver));
 }
 
 /* ----------------------------------------------------------------
