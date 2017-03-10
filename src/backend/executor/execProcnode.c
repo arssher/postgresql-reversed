@@ -152,7 +152,6 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 			result = NULL;		/* keep compiler quiet */
 			break;
 	}
-	return NULL;
 
 	/* Set up instrumentation for this node if requested */
 	if (estate->es_instrument)
