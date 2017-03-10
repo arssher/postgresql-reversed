@@ -146,25 +146,25 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 
 	switch (nodeTag(node))
 	{
-		/*
-		 * scan nodes
-		 */
+			/*
+			 * scan nodes
+			 */
 		case T_SeqScan:
 			result = (PlanState *) ExecInitSeqScan((SeqScan *) node,
 												   estate, eflags, parent);
 			break;
 
-		/*
-		 * join nodes
-		 */
+			/*
+			 * join nodes
+			 */
 		case T_HashJoin:
 			result = (PlanState *) ExecInitHashJoin((HashJoin *) node,
 													estate, eflags, parent);
 			break;
 
-		/*
-		 * materialization nodes
-		 */
+			/*
+			 * materialization nodes
+			 */
 		case T_Hash:
 			result = (PlanState *) ExecInitHash((Hash *) node,
 												estate, eflags, parent);
@@ -293,23 +293,23 @@ ExecEndNode(PlanState *node)
 
 	switch (nodeTag(node))
 	{
-		/*
-		 * scan nodes
-		 */
+			/*
+			 * scan nodes
+			 */
 		case T_SeqScanState:
 			ExecEndSeqScan((SeqScanState *) node);
 			break;
 
-		/*
-		 * join nodes
-		 */
+			/*
+			 * join nodes
+			 */
 		case T_HashJoinState:
 			ExecEndHashJoin((HashJoinState *) node);
 			break;
 
-		/*
-		 * materialization nodes
-		 */
+			/*
+			 * materialization nodes
+			 */
 		case T_HashState:
 			ExecEndHash((HashState *) node);
 			break;
