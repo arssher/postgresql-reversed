@@ -1062,6 +1062,7 @@ typedef struct PlanState
 	 */
 	List	   *targetlist;		/* target list to be computed at this node */
 	List	   *qual;			/* implicitly-ANDed qual conditions */
+	struct PlanState *parent;   /* parent node, NULL if root */
 	struct PlanState *lefttree; /* input plan tree(s) */
 	struct PlanState *righttree;
 	List	   *initPlan;		/* Init SubPlanState nodes (un-correlated expr

@@ -1704,7 +1704,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 		/* Now init the plan for this result rel */
 		estate->es_result_relation_info = resultRelInfo;
-		mtstate->mt_plans[i] = ExecInitNode(subplan, estate, eflags);
+		mtstate->mt_plans[i] = ExecInitNode(subplan, estate, eflags, NULL);
 
 		/* Also let FDWs init themselves for foreign-table result rels */
 		if (!resultRelInfo->ri_usesFdwDirectModify &&

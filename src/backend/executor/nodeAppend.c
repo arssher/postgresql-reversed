@@ -171,7 +171,7 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 	{
 		Plan	   *initNode = (Plan *) lfirst(lc);
 
-		appendplanstates[i] = ExecInitNode(initNode, estate, eflags);
+		appendplanstates[i] = ExecInitNode(initNode, estate, eflags, NULL);
 		i++;
 	}
 

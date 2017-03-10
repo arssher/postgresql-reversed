@@ -240,7 +240,7 @@ ExecInitProjectSet(ProjectSet *node, EState *estate, int eflags)
 	/*
 	 * initialize child nodes
 	 */
-	outerPlanState(state) = ExecInitNode(outerPlan(node), estate, eflags);
+	outerPlanState(state) = ExecInitNode(outerPlan(node), estate, eflags, NULL);
 
 	/*
 	 * we don't use inner plan

@@ -200,7 +200,8 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	/*
 	 * initialize child nodes
 	 */
-	outerPlanState(hashstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	outerPlanState(hashstate) = ExecInitNode(outerPlan(node), estate, eflags,
+											 (PlanState*) hashstate);
 
 	/*
 	 * initialize tuple type. no need to initialize projection info because
