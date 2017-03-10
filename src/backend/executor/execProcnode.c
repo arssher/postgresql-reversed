@@ -174,6 +174,13 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 
 	switch (nodeTag(node))
 	{
+		/*
+		 * scan nodes
+		 */
+		case T_SeqScan:
+			result = (PlanState *) ExecInitSeqScan((SeqScan *) node,
+												   estate, eflags, parent);
+			break;
 		default:
 			elog(ERROR, "unrecognized/unsupported node type: %d",
 				 (int) nodeTag(node));
@@ -208,6 +215,10 @@ ExecLeaf(PlanState *node)
 
 	switch (nodeTag(node))
 	{
+		case T_SeqScanState:
+			ExecSeqScan((SeqScanState *) node);
+			break;
+
 		default:
 			elog(ERROR, "bottom node type not supported: %d",
 				 (int) nodeTag(node));
@@ -250,7 +261,7 @@ ExecPushTuple(TupleTableSlot *slot, PlanState *pusher)
 }
 
 /*
- * Signal the parent that we are done. Like in ExecPushTuple, sender is param
+ * Signal parent that we are done. Like in ExecPushTuple, sender is param
  * here because we need to distinguish inner and outer pushes.
  *
  * 'slot' must be null tuple. It exists to be able to transfer correct
@@ -271,7 +282,8 @@ ExecPushNull(TupleTableSlot *slot, PlanState *pusher)
 	 */
 	if (receiver == NULL)
 	{
-		SendReadyTuple(NULL, pusher);
+		SendReadyTuple(slot, pusher);
+		return;
 	}
 
 	elog(ERROR, "node type not supported: %d", (int) nodeTag(receiver));
@@ -316,6 +328,13 @@ ExecEndNode(PlanState *node)
 
 	switch (nodeTag(node))
 	{
+		/*
+		 * scan nodes
+		 */
+		case T_SeqScanState:
+			ExecEndSeqScan((SeqScanState *) node);
+			break;
+
 		default:
 			elog(ERROR, "unrecognized/unsupported node type: %d",
 				 (int) nodeTag(node));

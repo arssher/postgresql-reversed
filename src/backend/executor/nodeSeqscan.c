@@ -15,7 +15,7 @@
 /*
  * INTERFACE ROUTINES
  *		ExecSeqScan				sequentially scans a relation.
- *		ExecSeqNext				retrieve next tuple in sequential order.
+ *		pushTupleToSeqScan		pushes all tuples to parent node
  *		ExecInitSeqScan			creates and initializes a seqscan node.
  *		ExecEndSeqScan			releases any storage allocated.
  *		ExecReScanSeqScan		rescans the relation
@@ -30,29 +30,25 @@
 #include "executor/execdebug.h"
 #include "executor/nodeSeqscan.h"
 #include "utils/rel.h"
+#include "access/heapam.h"
 
 static void InitScanRelation(SeqScanState *node, EState *estate, int eflags);
-static TupleTableSlot *SeqNext(SeqScanState *node);
 
 /* ----------------------------------------------------------------
  *						Scan Support
  * ----------------------------------------------------------------
  */
 
-/* ----------------------------------------------------------------
- *		SeqNext
- *
- *		This is a workhorse for ExecSeqScan
- * ----------------------------------------------------------------
+/*
+ * Push scanned tuples to the parent. Stop when all tuples are pushed or
+ * the parent told us to stop pushing.
  */
-static TupleTableSlot *
-SeqNext(SeqScanState *node)
+void
+ExecSeqScan(SeqScanState *node)
 {
-	HeapTuple	tuple;
-	HeapScanDesc scandesc;
 	EState	   *estate;
+	HeapScanDesc scandesc;
 	ScanDirection direction;
-	TupleTableSlot *slot;
 
 	/*
 	 * get information from the estate and scan state
@@ -60,8 +56,11 @@ SeqNext(SeqScanState *node)
 	scandesc = node->ss.ss_currentScanDesc;
 	estate = node->ss.ps.state;
 	direction = estate->es_direction;
-	slot = node->ss.ss_ScanTupleSlot;
 
+	/* ExecScanFetch not implemented */
+	Assert(estate->es_epqTuple == NULL);
+
+	/* create scandesc, part of old SeqNext before heap_getnext */
 	if (scandesc == NULL)
 	{
 		/*
@@ -73,30 +72,15 @@ SeqNext(SeqScanState *node)
 								  0, NULL);
 		node->ss.ss_currentScanDesc = scandesc;
 	}
+	Assert(scandesc);
 
-	/*
-	 * get the next tuple from the table
-	 */
-	tuple = heap_getnext(scandesc, direction);
+	/* not-page-at-time not supported for now */
+	Assert(scandesc->rs_pageatatime);
+	heappushtups(scandesc, direction,
+				 scandesc->rs_nkeys,
+				 scandesc->rs_key,
+				 node);
 
-	/*
-	 * save the tuple and the buffer returned to us by the access methods in
-	 * our scan tuple slot and return the slot.  Note: we pass 'false' because
-	 * tuples returned by heap_getnext() are pointers onto disk pages and were
-	 * not created with palloc() and so should not be pfree()'d.  Note also
-	 * that ExecStoreTuple will increment the refcount of the buffer; the
-	 * refcount will not be dropped until the tuple table slot is cleared.
-	 */
-	if (tuple)
-		ExecStoreTuple(tuple,	/* tuple to store */
-					   slot,	/* slot to store in */
-					   scandesc->rs_cbuf,		/* buffer associated with this
-												 * tuple */
-					   false);	/* don't pfree this pointer */
-	else
-		ExecClearTuple(slot);
-
-	return slot;
 }
 
 /*
@@ -110,23 +94,6 @@ SeqRecheck(SeqScanState *node, TupleTableSlot *slot)
 	 * (and this is very bad) - so, here we do not check are keys ok or not.
 	 */
 	return true;
-}
-
-/* ----------------------------------------------------------------
- *		ExecSeqScan(node)
- *
- *		Scans the relation sequentially and returns the next qualifying
- *		tuple.
- *		We call the ExecScan() routine and pass it the appropriate
- *		access method functions.
- * ----------------------------------------------------------------
- */
-TupleTableSlot *
-ExecSeqScan(SeqScanState *node)
-{
-	return ExecScan((ScanState *) node,
-					(ExecScanAccessMtd) SeqNext,
-					(ExecScanRecheckMtd) SeqRecheck);
 }
 
 /* ----------------------------------------------------------------
@@ -154,13 +121,12 @@ InitScanRelation(SeqScanState *node, EState *estate, int eflags)
 	ExecAssignScanType(&node->ss, RelationGetDescr(currentRelation));
 }
 
-
 /* ----------------------------------------------------------------
  *		ExecInitSeqScan
  * ----------------------------------------------------------------
  */
 SeqScanState *
-ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
+ExecInitSeqScan(SeqScan *node, EState *estate, int eflags, PlanState *parent)
 {
 	SeqScanState *scanstate;
 
@@ -177,6 +143,7 @@ ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
 	scanstate = makeNode(SeqScanState);
 	scanstate->ss.ps.plan = (Plan *) node;
 	scanstate->ss.ps.state = estate;
+	scanstate->ss.ps.parent = parent;
 
 	/*
 	 * Miscellaneous initialization

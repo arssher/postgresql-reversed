@@ -126,6 +126,14 @@ extern void heap_rescan_set_params(HeapScanDesc scan, ScanKey key,
 					 bool allow_strat, bool allow_sync, bool allow_pagemode);
 extern void heap_endscan(HeapScanDesc scan);
 extern HeapTuple heap_getnext(HeapScanDesc scan, ScanDirection direction);
+/* forward decls because now we need to know about PlanState  */
+typedef struct PlanState PlanState;
+typedef struct SeqScanState SeqScanState;
+extern void heappushtups(HeapScanDesc scan,
+						 ScanDirection dir,
+						 int nkeys,
+						 ScanKey key,
+						 SeqScanState *pusher);
 
 extern Size heap_parallelscan_estimate(Snapshot snapshot);
 extern void heap_parallelscan_initialize(ParallelHeapScanDesc target,
