@@ -59,6 +59,7 @@
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 #include "utils/tqual.h"
+#include "executor/executor.h"
 
 
 /* Hooks for plugins to get control in ExecutorStart/Run/Finish/End */
@@ -75,13 +76,7 @@ static void InitPlan(QueryDesc *queryDesc, int eflags);
 static void CheckValidRowMarkRel(Relation rel, RowMarkType markType);
 static void ExecPostprocessPlan(EState *estate);
 static void ExecEndPlan(PlanState *planstate, EState *estate);
-static void ExecutePlan(EState *estate, PlanState *planstate,
-			bool use_parallel_mode,
-			CmdType operation,
-			bool sendTuples,
-			uint64 numberTuples,
-			ScanDirection direction,
-			DestReceiver *dest);
+static void RunNode(PlanState *planstate);
 static bool ExecCheckRTEPerms(RangeTblEntry *rte);
 static bool ExecCheckRTEPermsModified(Oid relOid, Oid userid,
 						  Bitmapset *modifiedCols,
@@ -331,18 +326,24 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	if (sendTuples)
 		(*dest->rStartup) (dest, operation, queryDesc->tupDesc);
 
+	/* set up state needed for sending tuples to the dest */
+	estate->es_current_tuple_count = 0;
+	estate->es_sendTuples = sendTuples;
+	estate->es_numberTuplesRequested = count;
+	estate->es_operation = operation;
+	estate->es_dest = dest;
+
+	/*
+	 * Set the direction.
+	 */
+	estate->es_direction = direction;
+
 	/*
 	 * run plan
 	 */
 	if (!ScanDirectionIsNoMovement(direction))
-		ExecutePlan(estate,
-					queryDesc->planstate,
-					queryDesc->plannedstmt->parallelModeNeeded,
-					operation,
-					sendTuples,
-					count,
-					direction,
-					dest);
+		/* Run each leaf in right order	 */
+		RunNode(queryDesc->planstate);
 
 	/*
 	 * shutdown tuple receiver, if we started it
@@ -1481,130 +1482,6 @@ ExecEndPlan(PlanState *planstate, EState *estate)
 			heap_close(erm->relation, NoLock);
 	}
 }
-
-/* ----------------------------------------------------------------
- *		ExecutePlan
- *
- *		Processes the query plan until we have retrieved 'numberTuples' tuples,
- *		moving in the specified direction.
- *
- *		Runs to completion if numberTuples is 0
- *
- * Note: the ctid attribute is a 'junk' attribute that is removed before the
- * user can see it
- * ----------------------------------------------------------------
- */
-static void
-ExecutePlan(EState *estate,
-			PlanState *planstate,
-			bool use_parallel_mode,
-			CmdType operation,
-			bool sendTuples,
-			uint64 numberTuples,
-			ScanDirection direction,
-			DestReceiver *dest)
-{
-	TupleTableSlot *slot;
-	uint64		current_tuple_count;
-
-	/*
-	 * initialize local variables
-	 */
-	current_tuple_count = 0;
-
-	/*
-	 * Set the direction.
-	 */
-	estate->es_direction = direction;
-
-	/*
-	 * If a tuple count was supplied, we must force the plan to run without
-	 * parallelism, because we might exit early.  Also disable parallelism
-	 * when writing into a relation, because no database changes are allowed
-	 * in parallel mode.
-	 */
-	if (numberTuples || dest->mydest == DestIntoRel)
-		use_parallel_mode = false;
-
-	/*
-	 * If a tuple count was supplied, we must force the plan to run without
-	 * parallelism, because we might exit early.
-	 */
-	if (use_parallel_mode)
-		EnterParallelMode();
-
-	/*
-	 * Loop until we've processed the proper number of tuples from the plan.
-	 */
-	for (;;)
-	{
-		/* Reset the per-output-tuple exprcontext */
-		ResetPerTupleExprContext(estate);
-
-		/*
-		 * Execute the plan and obtain a tuple
-		 */
-		slot = ExecProcNode(planstate);
-
-		/*
-		 * if the tuple is null, then we assume there is nothing more to
-		 * process so we just end the loop...
-		 */
-		if (TupIsNull(slot))
-		{
-			/* Allow nodes to release or shut down resources. */
-			(void) ExecShutdownNode(planstate);
-			break;
-		}
-
-		/*
-		 * If we have a junk filter, then project a new tuple with the junk
-		 * removed.
-		 *
-		 * Store this new "clean" tuple in the junkfilter's resultSlot.
-		 * (Formerly, we stored it back over the "dirty" tuple, which is WRONG
-		 * because that tuple slot has the wrong descriptor.)
-		 */
-		if (estate->es_junkFilter != NULL)
-			slot = ExecFilterJunk(estate->es_junkFilter, slot);
-
-		/*
-		 * If we are supposed to send the tuple somewhere, do so. (In
-		 * practice, this is probably always the case at this point.)
-		 */
-		if (sendTuples)
-		{
-			/*
-			 * If we are not able to send the tuple, we assume the destination
-			 * has closed and no more tuples can be sent. If that's the case,
-			 * end the loop.
-			 */
-			if (!((*dest->receiveSlot) (slot, dest)))
-				break;
-		}
-
-		/*
-		 * Count tuples processed, if this is a SELECT.  (For other operation
-		 * types, the ModifyTable plan node must count the appropriate
-		 * events.)
-		 */
-		if (operation == CMD_SELECT)
-			(estate->es_processed)++;
-
-		/*
-		 * check our tuple count.. if we've processed the proper number then
-		 * quit, else loop again and process more tuples.  Zero numberTuples
-		 * means no limit.
-		 */
-		current_tuple_count++;
-		if (numberTuples && numberTuples == current_tuple_count)
-			break;
-	}
-
-	if (use_parallel_mode)
-		ExitParallelMode();
-}
-
 
 /*
  * ExecRelCheck --- check that tuple meets constraints for result relation
@@ -2904,4 +2781,109 @@ EvalPlanQualEnd(EPQState *epqstate)
 	epqstate->estate = NULL;
 	epqstate->planstate = NULL;
 	epqstate->origslot = NULL;
+}
+
+/*
+ * This function pushes the ready tuple to it's destination. It should
+ * be called by top-level PlanState.
+ * For now, I added the state needed for this to estate, specifically
+ * current_tuple_count, sendTuples, numberTuplesRequested (old numberTuples),
+ * cmdType, dest.
+ *
+ * slot is the tuple to push
+ * planstate is top-level node
+ * returns true, if we are ready to accept more tuples, false otherwise
+ */
+bool
+SendReadyTuple(TupleTableSlot *slot, PlanState *planstate)
+{
+	EState *estate;
+	bool sendTuples;
+	CmdType operation;
+	DestReceiver *dest;
+
+	estate = planstate->state;
+	sendTuples = estate->es_sendTuples;
+	operation = estate->es_operation;
+	dest = estate->es_dest;
+
+	if (TupIsNull(slot))
+	{
+		/* Allow nodes to release or shut down resources. */
+		(void) ExecShutdownNode(planstate);
+		return false;
+	}
+
+	/*
+	 * If we have a junk filter, then project a new tuple with the junk
+	 * removed.
+	 *
+	 * Store this new "clean" tuple in the junkfilter's resultSlot.
+	 * (Formerly, we stored it back over the "dirty" tuple, which is WRONG
+	 * because that tuple slot has the wrong descriptor.)
+	 */
+	if (estate->es_junkFilter != NULL)
+		slot = ExecFilterJunk(estate->es_junkFilter, slot);
+
+	/*
+	 * If we are supposed to send the tuple somewhere, do so. (In
+	 * practice, this is probably always the case at this point.)
+	 */
+	if (sendTuples)
+	{
+		/*
+		 * If we are not able to send the tuple, we assume the destination
+		 * has closed and no more tuples can be sent.
+		 */
+		if (!((*dest->receiveSlot) (slot, dest)))
+			return false;
+	}
+
+	/*
+	 * Count tuples processed, if this is a SELECT.  (For other operation
+	 * types, the ModifyTable plan node must count the appropriate
+	 * events.)
+	 */
+	if (operation == CMD_SELECT)
+		(estate->es_processed)++;
+
+	/*
+	 * check our tuple count.. if we've processed the proper number then
+	 * quit, else process more tuples.  Zero numberTuplesRequested
+	 * means no limit.
+	 */
+	estate->es_current_tuple_count++;
+	if (estate->es_numberTuplesRequested &&
+		estate->es_numberTuplesRequested == estate->es_current_tuple_count)
+		return false;
+
+	/* Should we do it here? */
+	ResetPerTupleExprContext(estate);
+	return true;
+}
+
+/*
+ * When pushing, we have to call pushTuple on each leaf of the tree in correct
+ * order: first inner sides, then outer. This function does exactly that.
+ */
+void
+RunNode(PlanState *planstate)
+{
+	Assert(planstate != NULL);
+
+	if (innerPlanState(planstate) != NULL)
+	{
+		RunNode(innerPlanState(planstate));
+		/* I assume that if inner node exists, outer exists too */
+		RunNode(outerPlanState(planstate));
+		return;
+	}
+	if (outerPlanState(planstate) != NULL)
+	{
+		RunNode(outerPlanState(planstate));
+		return;
+	}
+
+	/* node has no childs, it is a leaf */
+	pushTuple(NULL, planstate, NULL);
 }

@@ -161,7 +161,6 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 	return result;
 }
 
-
 /*
  * Unsupported, left to avoid deleting 19k lines of existing code
  */
@@ -170,6 +169,54 @@ ExecProcNode(PlanState *node)
 {
 	elog(ERROR, "ExecProcNode is not supported");
 	return NULL;
+}
+
+/*
+ * Instead of old ExecProcNode, here we will have function pushTuple
+ * pushing one tuple.
+ * 'tuple' is a tuple to push
+ * 'node' is a receiver of tuple
+ * 'pusher' is a sender of a tuple, it's parent is 'node'. We need it to
+ * distinguish inner and outer pushes.
+ * Returns true if node is still accepting tuples, false if not.
+ * ReScans are not supported yet.
+ * In general, if a tuple was pushed into a node which returned 'false' before,
+ * the behaviour is undefined, i.e. it is not allowed; however, I will try
+ * to catch such situations with asserts.
+ */
+bool
+pushTuple(TupleTableSlot *slot, PlanState *node, PlanState *pusher)
+{
+	bool push_from_outer;
+
+	CHECK_FOR_INTERRUPTS();
+
+	/* If the receiver is NULL, then pusher is top-level node, so we need
+	 * to send the tuple to the dest
+	 */
+	if (!node)
+	{
+		return SendReadyTuple(slot, pusher);
+	}
+
+	/* If pusher is NULL, then node is a bottom node, another special case:
+	 * bottom nodes obviously don't need neither tuple nor pusher
+	 */
+	if (!pusher)
+	{
+		switch (nodeTag(node))
+		{
+			default:
+				elog(ERROR, "bottom node type not supported: %d",
+					 (int) nodeTag(node));
+				return false;
+		}
+	}
+
+	/* does push come from the outer side? */
+	push_from_outer = outerPlanState(node) == pusher;
+
+	elog(ERROR, "node type not supported: %d", (int) nodeTag(node));
 }
 
 /* ----------------------------------------------------------------
