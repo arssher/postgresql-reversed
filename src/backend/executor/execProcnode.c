@@ -153,6 +153,22 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 			result = (PlanState *) ExecInitSeqScan((SeqScan *) node,
 												   estate, eflags, parent);
 			break;
+
+			/*
+			 * join nodes
+			 */
+		case T_HashJoin:
+			result = (PlanState *) ExecInitHashJoin((HashJoin *) node,
+													estate, eflags, parent);
+			break;
+
+			/*
+			 * materialization nodes
+			 */
+		case T_Hash:
+			result = (PlanState *) ExecInitHash((Hash *) node,
+												estate, eflags, parent);
+			break;
 		default:
 			elog(ERROR, "unrecognized/unsupported node type: %d",
 				 (int) nodeTag(node));
@@ -226,6 +242,15 @@ pushTuple(TupleTableSlot *slot, PlanState *node, PlanState *pusher)
 	/* does push come from the outer side? */
 	push_from_outer = outerPlanState(node) == pusher;
 
+	if (nodeTag(node) == T_HashState)
+		return pushTupleToHash(slot, (HashState *) node);
+
+	else if (nodeTag(node) == T_HashJoinState && push_from_outer)
+		return pushTupleToHashJoinFromOuter(slot, (HashJoinState *) node);
+
+	else if (nodeTag(node) == T_HashJoinState && !push_from_outer)
+		return pushTupleToHashJoinFromInner(slot, (HashJoinState *) node);
+
 	elog(ERROR, "node type not supported: %d", (int) nodeTag(node));
 }
 
@@ -273,6 +298,20 @@ ExecEndNode(PlanState *node)
 			 */
 		case T_SeqScanState:
 			ExecEndSeqScan((SeqScanState *) node);
+			break;
+
+			/*
+			 * join nodes
+			 */
+		case T_HashJoinState:
+			ExecEndHashJoin((HashJoinState *) node);
+			break;
+
+			/*
+			 * materialization nodes
+			 */
+		case T_HashState:
+			ExecEndHash((HashState *) node);
 			break;
 
 		default:
