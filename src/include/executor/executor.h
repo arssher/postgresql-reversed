@@ -17,6 +17,7 @@
 #include "catalog/partition.h"
 #include "executor/execdesc.h"
 #include "nodes/parsenodes.h"
+#include "utils/memutils.h"
 
 
 /*
@@ -121,12 +122,6 @@ extern bool execCurrentOf(CurrentOfExpr *cexpr,
 /*
  * prototypes from functions in execGrouping.c
  */
-extern bool execTuplesMatch(TupleTableSlot *slot1,
-				TupleTableSlot *slot2,
-				int numCols,
-				AttrNumber *matchColIdx,
-				FmgrInfo *eqfunctions,
-				MemoryContext evalContext);
 extern bool execTuplesUnequal(TupleTableSlot *slot1,
 				  TupleTableSlot *slot2,
 				  int numCols,
@@ -415,6 +410,97 @@ extern void ExecSimpleRelationUpdate(EState *estate, EPQState *epqstate,
 extern void ExecSimpleRelationDelete(EState *estate, EPQState *epqstate,
 						 TupleTableSlot *searchslot);
 extern void CheckCmdReplicaIdentity(Relation rel, CmdType cmd);
+
+
+/*
+ * Below goes static inlined function moved from execGrouping.c: since
+ * we have inlined all hashtable interface functions in nodeAgg.c, why not
+ * inline execTuplesMatch too?
+ * Obviously this is not a good place for it, it should be moved to
+ * something like execGrouping.h and all calls updated.
+ */
+
+static inline bool execTuplesMatch(TupleTableSlot *slot1,
+								   TupleTableSlot *slot2,
+								   int numCols,
+								   AttrNumber *matchColIdx,
+								   FmgrInfo *eqfunctions,
+								   MemoryContext evalContext);
+
+/*
+ * execTuplesMatch
+ *		Return true if two tuples match in all the indicated fields.
+ *
+ * This actually implements SQL's notion of "not distinct".  Two nulls
+ * match, a null and a not-null don't match.
+ *
+ * slot1, slot2: the tuples to compare (must have same columns!)
+ * numCols: the number of attributes to be examined
+ * matchColIdx: array of attribute column numbers
+ * eqFunctions: array of fmgr lookup info for the equality functions to use
+ * evalContext: short-term memory context for executing the functions
+ *
+ * NB: evalContext is reset each time!
+ */
+static inline bool
+execTuplesMatch(TupleTableSlot *slot1,
+				TupleTableSlot *slot2,
+				int numCols,
+				AttrNumber *matchColIdx,
+				FmgrInfo *eqfunctions,
+				MemoryContext evalContext)
+{
+	MemoryContext oldContext;
+	bool		result;
+	int			i;
+
+	/* Reset and switch into the temp context. */
+	MemoryContextReset(evalContext);
+	oldContext = MemoryContextSwitchTo(evalContext);
+
+	/*
+	 * We cannot report a match without checking all the fields, but we can
+	 * report a non-match as soon as we find unequal fields.  So, start
+	 * comparing at the last field (least significant sort key). That's the
+	 * most likely to be different if we are dealing with sorted input.
+	 */
+	result = true;
+
+	for (i = numCols; --i >= 0;)
+	{
+		AttrNumber	att = matchColIdx[i];
+		Datum		attr1,
+					attr2;
+		bool		isNull1,
+					isNull2;
+
+		attr1 = slot_getattr(slot1, att, &isNull1);
+
+		attr2 = slot_getattr(slot2, att, &isNull2);
+
+		if (isNull1 != isNull2)
+		{
+			result = false;		/* one null and one not; they aren't equal */
+			break;
+		}
+
+		if (isNull1)
+			continue;			/* both are null, treat as equal */
+
+		/* Apply the type-specific equality function */
+
+		if (!DatumGetBool(FunctionCall2(&eqfunctions[i],
+										attr1, attr2)))
+		{
+			result = false;		/* they aren't equal */
+			break;
+		}
+	}
+
+	MemoryContextSwitchTo(oldContext);
+
+	return result;
+}
 
 
 #endif   /* EXECUTOR_H  */

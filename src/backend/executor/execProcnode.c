@@ -193,6 +193,11 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 		/*
 		 * materialization nodes
 		 */
+		case T_Agg:
+			result = (PlanState *) ExecInitAgg((Agg *) node,
+											   estate, eflags, parent);
+			break;
+
 		case T_Hash:
 			result = (PlanState *) ExecInitHash((Hash *) node,
 												estate, eflags, parent);
@@ -282,6 +287,10 @@ ExecPushTuple(TupleTableSlot *slot, PlanState *pusher)
 
 	if (nodeTag(receiver) == T_LimitState)
 		return ExecPushTupleToLimit(slot, (LimitState *) receiver);
+
+	else if (nodeTag(receiver) == T_AggState)
+		return ExecPushTupleToAgg(slot, (AggState *) receiver);
+
 	else if (nodeTag(receiver) == T_HashState)
 		return ExecPushTupleToHash(slot, (HashState *) receiver);
 
@@ -324,6 +333,10 @@ ExecPushNull(TupleTableSlot *slot, PlanState *pusher)
 
 	if (nodeTag(receiver) == T_LimitState)
 		return ExecPushNullToLimit(slot, (LimitState *) receiver);
+
+	else if (nodeTag(receiver) == T_AggState)
+		return ExecPushNullToAgg(slot, (AggState *) receiver);
+
 	else if (nodeTag(receiver) == T_HashState)
 		return ExecPushNullToHash(slot, (HashState *) receiver);
 
@@ -397,6 +410,10 @@ ExecEndNode(PlanState *node)
 		/*
 		 * materialization nodes
 		 */
+		case T_AggState:
+			ExecEndAgg((AggState *) node);
+			break;
+
 		case T_HashState:
 			ExecEndHash((HashState *) node);
 			break;
