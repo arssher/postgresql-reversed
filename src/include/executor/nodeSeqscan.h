@@ -94,7 +94,7 @@ SeqStoreTuple(SeqScanState *node, HeapTuple tuple)
  * Returns true, if parent accepts more tuples, false otherwise
  */
 inline bool SeqPushHeapTuple(HeapTuple tuple, PlanState *node,
-									SeqScanState *pusher)
+							 SeqScanState *pusher)
 {
 	ExprContext *econtext;
 	List	   *qual;
