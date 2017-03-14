@@ -24,6 +24,7 @@
 #include "executor/tuptable.h"
 #include "fmgr.h"
 #include "utils/relcache.h"
+#include "nodes/execnodes.h"
 
 
 /* Tuplesortstate is an opaque type whose details are not known outside
@@ -92,6 +93,9 @@ extern void tuplesort_putdatum(Tuplesortstate *state, Datum val,
 
 extern void tuplesort_performsort(Tuplesortstate *state);
 
+/* forward decl, since now tuplesort.h and execnodes.h include each other */
+typedef struct SortState SortState;
+extern bool tuplesort_pushtuples(Tuplesortstate *state, SortState *node);
 extern bool tuplesort_gettupleslot(Tuplesortstate *state, bool forward,
 					   TupleTableSlot *slot, Datum *abbrev);
 extern HeapTuple tuplesort_getheaptuple(Tuplesortstate *state, bool forward,

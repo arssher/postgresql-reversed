@@ -1463,9 +1463,11 @@ hash_freeze(HTAB *hashp)
  * hash_foreach
  *			Do something with each entry. For now AggPushHashEntry is
  *			hardcoded, but in fact this function doesn't care about exact
- *			action.
+ *			action, and using datums and void* we can add others.
+ *
+ *			Returns last result of callback func.
  */
-void hash_foreach(HTAB *hashp, void *arg)
+bool hash_foreach(HTAB *hashp, void *arg)
 {
 	uint32		curBucket = 0;
 	HASHELEMENT *curElem = NULL;
@@ -1475,6 +1477,7 @@ void hash_foreach(HTAB *hashp, void *arg)
 	long		segment_num;
 	long		segment_ndx;
 	HASHSEGMENT segp;
+	bool callback_res = true;  /* hardcoded for AggPushHashEntry */
 
 	while (curBucket <= max_bucket)
 	{
@@ -1497,7 +1500,7 @@ void hash_foreach(HTAB *hashp, void *arg)
 		{
 			/* empty bucket, advance to next */
 			if (++curBucket > max_bucket)
-				return;  /* search is done */
+				return callback_res;  /* search is done */
 			if (++segment_ndx >= ssize)
 			{
 				segment_num++;
@@ -1509,12 +1512,14 @@ void hash_foreach(HTAB *hashp, void *arg)
 		/* Ok, first element is found, scan curBucket... */
 		do
 		{
-			AggPushHashEntry((AggState *) arg,
-							 (AggHashEntry) ELEMENTKEY(curElem));
+			callback_res = AggPushHashEntry((AggState *) arg,
+											(AggHashEntry) ELEMENTKEY(curElem));
 			curElem = curElem->link;
 		} while (curElem != NULL);
 		++curBucket;
 	}
+
+	return callback_res;
 }
 
 /********************************* UTILITIES ************************/

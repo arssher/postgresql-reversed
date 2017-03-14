@@ -2035,6 +2035,42 @@ tuplesort_gettuple_common(Tuplesortstate *state, bool forward,
 }
 
 /*
+ * Push every tuple from tuplesort. Returns last pushTuple() result.
+ */
+
+bool tuplesort_pushtuples(Tuplesortstate *state, SortState *node)
+{
+	SortTuple	stup;
+	MemoryContext oldcontext = CurrentMemoryContext;
+	TupleTableSlot *slot = node->ss.ps.ps_ResultTupleSlot;
+	bool parent_accepts_tuples = true;
+
+	/* only in mem sort is supported for now */
+	Assert(state->status == TSS_SORTEDINMEM);
+	Assert(!state->batchUsed);
+
+	while (state->current < state->memtupcount)
+	{
+		/* Imitating context switching as it was before */
+		oldcontext = MemoryContextSwitchTo(state->sortcontext);
+		stup = state->memtuples[state->current++];
+		MemoryContextSwitchTo(oldcontext);
+
+		/* since we support only TSS_SORTEDINMEM, should_free is ever true */
+		stup.tuple = heap_copy_minimal_tuple((MinimalTuple) stup.tuple);
+		ExecStoreMinimalTuple((MinimalTuple) stup.tuple, slot, true);
+		parent_accepts_tuples =
+			pushTuple(slot, node->ss.ps.parent, (PlanState *) node);
+		if (!parent_accepts_tuples)
+			return false;
+	}
+
+	state->eof_reached = true;
+	ExecClearTuple(slot);
+	return parent_accepts_tuples;
+}
+
+/*
  * Fetch the next tuple in either forward or back direction.
  * If successful, put tuple in slot and return TRUE; else, clear the slot
  * and return FALSE.
