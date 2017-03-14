@@ -491,3 +491,27 @@ if test x"$Ac_cachevar" = x"yes"; then
 fi
 undefine([Ac_cachevar])dnl
 ])# PGAC_SSE42_CRC32_INTRINSICS
+
+
+
+# PGAC_C_COMPUTED_GOTO
+# -----------------------
+# Check if the C compiler knows computed gotos (gcc extension, also
+# available in at least clang).  If so define HAVE_COMPUTED_GOTO
+#
+# Checking whether computed gotos are supported syntax-wise ought to
+# be enough, as the syntax is otherwise illegal.
+AC_DEFUN([PGAC_C_COMPUTED_GOTO],
+[AC_CACHE_CHECK(for computed goto support, pgac_cv__computed_goto,
+[AC_COMPILE_IFELSE([AC_LANG_PROGRAM([],
+[[void *labeladdrs[] = {&&my_label};
+  goto *labeladdrs[0];
+  my_label:
+  return 1;
+]])],
+[pgac_cv__computed_goto=yes],
+[pgac_cv__computed_goto=no])])
+if test x"$pgac_cv__computed_goto" = xyes ; then
+AC_DEFINE(HAVE__COMPUTED_GOTO, 1,
+  [Define to 1 if your compiler handles computed gotos.])
+fi])# PGAC_C_COMPUTED_GOTO
