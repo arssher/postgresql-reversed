@@ -32,6 +32,12 @@
 #include "utils/rel.h"
 #include "access/heapam.h"
 
+/* emit the symbol anyway */
+extern inline bool SeqPushHeapTuple(HeapTuple tuple, PlanState *node,
+									SeqScanState *pusher);
+extern inline TupleTableSlot *SeqStoreTuple(SeqScanState *node, HeapTuple tuple);
+extern inline void SeqPushNull(PlanState *node, SeqScanState *pusher);
+
 static void InitScanRelation(SeqScanState *node, EState *estate, int eflags);
 
 /* ----------------------------------------------------------------
@@ -83,12 +89,6 @@ pushTupleToSeqScan(SeqScanState *node)
 
 	return false;
 }
-
-/* emit the symbol anyway */
-extern inline bool SeqPushHeapTuple(HeapTuple tuple, PlanState *node,
-									SeqScanState *pusher);
-extern inline TupleTableSlot *SeqStoreTuple(SeqScanState *node, HeapTuple tuple);
-extern inline void SeqPushNull(PlanState *node, SeqScanState *pusher);
 
 /*
  * SeqRecheck -- access method routine to recheck a tuple in EvalPlanQual
