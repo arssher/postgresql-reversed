@@ -208,9 +208,11 @@ ExecProcNode(PlanState *node)
  * distinguish inner and outer pushes.
  * Returns true if node is still accepting tuples, false if not.
  * ReScans are not supported yet.
- * In general, if a tuple was pushed into a node which returned 'false' before,
- * the behaviour is undefined, i.e. it is not allowed; however, I will try
- * to catch such situations with asserts.
+ * In general, if a tuple (even NULL) was pushed into a node which returned
+ * 'false' before, the behaviour is undefined, i.e. it is not allowed;
+ * however, we will try to catch such situations with asserts.
+ * If lower node have sent NULL tuple to upper node, we for now will not care
+ * to return it meaningful bool result and sent just false by convention.
  */
 bool
 pushTuple(TupleTableSlot *slot, PlanState *node, PlanState *pusher)
