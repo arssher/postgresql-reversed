@@ -90,6 +90,9 @@
 #include "utils/dynahash.h"
 #include "utils/memutils.h"
 
+#include "nodes/execnodes.h"
+#include "executor/nodeAgg.h"
+
 
 /*
  * Constants
@@ -1458,10 +1461,11 @@ hash_freeze(HTAB *hashp)
 
 /*
  * hash_foreach
- *			Do something with each entry. For now AggPushTuple is hardcoded,
- *			but in fact this function doesn't care about exact action.
+ *			Do something with each entry. For now AggPushHashEntry is
+ *			hardcoded, but in fact this function doesn't care about exact
+ *			action.
  */
-void hash_foreach(HTAB *hashp)
+void hash_foreach(HTAB *hashp, void *arg)
 {
 	uint32		curBucket = 0;
 	HASHELEMENT *curElem = NULL;
@@ -1505,7 +1509,8 @@ void hash_foreach(HTAB *hashp)
 		/* Ok, first element is found, scan curBucket... */
 		do
 		{
-			AggPushTuple((void *) ELEMENTKEY(curElem));
+			AggPushHashEntry((AggState *) arg,
+							 (AggHashEntry) ELEMENTKEY(curElem));
 			curElem = curElem->link;
 		} while (curElem != NULL);
 		++curBucket;
