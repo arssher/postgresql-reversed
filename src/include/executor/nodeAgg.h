@@ -15,9 +15,14 @@
 #define NODEAGG_H
 
 #include "nodes/execnodes.h"
+#include "executor.h"
+#include "utils/memutils.h"
+#include "utils/expandeddatum.h"
+#include "utils/datum.h"
 
-extern AggState *ExecInitAgg(Agg *node, EState *estate, int eflags);
-extern TupleTableSlot *ExecAgg(AggState *node);
+extern AggState *ExecInitAgg(Agg *node, EState *estate, int eflags,
+							 PlanState *parent);
+extern bool pushTupleToAgg(TupleTableSlot *slot, AggState *node);
 extern void ExecEndAgg(AggState *node);
 extern void ExecReScanAgg(AggState *node);
 

@@ -1456,7 +1456,6 @@ hash_freeze(HTAB *hashp)
 	hashp->frozen = true;
 }
 
-
 /********************************* UTILITIES ************************/
 
 /*

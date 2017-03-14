@@ -25,12 +25,33 @@
  *		declarations reside
  *    - SH_USE_NONDEFAULT_ALLOCATOR - if defined no element allocator functions
  *      are defined, so you can supply your own
+ *    - SH_FOREACH_ON -- if defined, SH_TYPE_foreach function for iterating
+ *		over the hashtable will be generated. This function works as follows:
+ *		SH_FOREACH_ACC_TYPE SH_TYPE_foreach(hashtable, void *direct_arg)
+ *		{
+ *		  accum = accum_init_val
+ *		  for each element in hashtable
+ *		    accum = accum_func(accum, foreach_func(element, direct_arg))
+ *		  return accum
+ *		}
+ *	  So, you have to specify the following macros if you use this:
+ *	  - SH_FOREACH_ACC_TYPE -- type of accum
+ *    - Some more if SH_DEFINE is defined
+
  *	  The following parameters are only relevant when SH_DEFINE is defined:
  *	  - SH_KEY - name of the element in SH_ELEMENT_TYPE containing the hash key
  *	  - SH_EQUAL(table, a, b) - compare two table keys
  *	  - SH_HASH_KEY(table, key) - generate hash for the key
  *	  - SH_STORE_HASH - if defined the hash is stored in the elements
  *	  - SH_GET_HASH(tb, a) - return the field to store the hash in
+ *    Macros for foreach:
+ *	  - SH_FOREACH_ACC_INIT -- initial value of accum
+ *	  - SH_FOREACH_FUNC -- name of foreach_func, it's prototype is
+ *	    SH_FOREACH_ACC_TYPE SH_TYPE_foreach(SH_ELEMENT_TYPE el,
+ *  										void *direct agg)
+ *    - SH_FOREACH_ACC_FUNC -- name of accum_func, it's prototype is
+ *      SH_FOREACH_ACC_TYPE accum_func(SH_FOREACH_ACC_TYPE old,
+ *									   SH_FOREACH_ACC_TYPE new)
  *
  *	  For examples of usage look at simplehash.c (file local definition) and
  *	  execnodes.h/execGrouping.c (exposed declaration, file local
@@ -75,6 +96,7 @@
 #define SH_INSERT SH_MAKE_NAME(insert)
 #define SH_DELETE SH_MAKE_NAME(delete)
 #define SH_LOOKUP SH_MAKE_NAME(lookup)
+#define SH_FOREACH SH_MAKE_NAME(foreach)
 #define SH_GROW SH_MAKE_NAME(grow)
 #define SH_START_ITERATE SH_MAKE_NAME(start_iterate)
 #define SH_START_ITERATE_AT SH_MAKE_NAME(start_iterate_at)
@@ -147,6 +169,9 @@ SH_SCOPE bool SH_DELETE(SH_TYPE *tb, SH_KEY_TYPE key);
 SH_SCOPE void SH_START_ITERATE(SH_TYPE *tb, SH_ITERATOR *iter);
 SH_SCOPE void SH_START_ITERATE_AT(SH_TYPE *tb, SH_ITERATOR *iter, uint32 at);
 SH_SCOPE SH_ELEMENT_TYPE *SH_ITERATE(SH_TYPE *tb, SH_ITERATOR *iter);
+#ifdef SH_FOREACH_ON
+SH_SCOPE SH_FOREACH_ACC_TYPE SH_FOREACH(SH_TYPE *tb, void *direct_arg);
+#endif	 /* SH_FOREACH_ON */
 SH_SCOPE void SH_STAT(SH_TYPE *tb);
 
 #endif   /* SH_DECLARE */
@@ -827,6 +852,35 @@ SH_ITERATE(SH_TYPE *tb, SH_ITERATOR *iter)
 }
 
 /*
+ * Iterate over the hashtable, doing something with each value and accumulating
+ * the result.
+ */
+#ifdef SH_FOREACH_ON
+SH_SCOPE SH_FOREACH_ACC_TYPE SH_FOREACH(SH_TYPE *tb, void *direct_arg)
+{
+	uint32 cur = 0;
+	SH_FOREACH_ACC_TYPE accum = SH_FOREACH_ACC_INIT;
+	SH_FOREACH_ACC_TYPE new_accum;
+	SH_ELEMENT_TYPE *elem;
+
+	do
+	{
+		elem = &tb->data[cur];
+		if (elem->status == SH_STATUS_IN_USE)
+		{
+			new_accum = SH_FOREACH_FUNC(elem, direct_arg);
+			accum = SH_FOREACH_ACC_FUNC(accum, new_accum);
+		}
+		/* next element in forward direction */
+		cur = (cur + 1) & tb->sizemask;
+	} while (cur != 0);
+
+	return accum;
+}
+#endif	 /* SH_FOREACH_ON */
+
+
+/*
  * Report some statistics about the state of the hashtable. For
  * debugging/profiling purposes only.
  */
@@ -914,6 +968,11 @@ SH_STAT(SH_TYPE *tb)
 #undef SH_GET_HASH
 #undef SH_STORE_HASH
 #undef SH_USE_NONDEFAULT_ALLOCATOR
+#undef SH_FOREACH_ON
+#undef SH_FOREACH_ACC_TYPE
+#undef SH_FOREACH_ACC_INIT
+#undef SH_FOREACH_FUNC
+#undef SH_FOREACH_ACC_FUNC
 
 /* undefine locally declared macros */
 #undef SH_MAKE_PREFIX
@@ -942,6 +1001,7 @@ SH_STAT(SH_TYPE *tb)
 #undef SH_START_ITERATE
 #undef SH_START_ITERATE_AT
 #undef SH_ITERATE
+#undef SH_FOREACH
 #undef SH_ALLOCATE
 #undef SH_FREE
 #undef SH_STAT
