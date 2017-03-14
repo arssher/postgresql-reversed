@@ -1429,24 +1429,11 @@ select * from tt14v;
  foo | baz | quux
 (1 row)
 
--- this perhaps should be rejected, but it isn't:
+-- this will be rejected as the column is referenced in the view:
 alter table tt14t drop column f3;
--- f3 is still in the view but will read as nulls
-select pg_get_viewdef('tt14v', true);
-         pg_get_viewdef         
---------------------------------
-  SELECT t.f1,                 +
-     t.f3,                     +
-     t.f4                      +
-    FROM tt14f() t(f1, f3, f4);
-(1 row)
-
-select * from tt14v;
- f1  | f3 |  f4  
------+----+------
- foo |    | quux
-(1 row)
-
+ERROR:  cannot drop table tt14t column f3 because other objects depend on it
+DETAIL:  view tt14v depends on table tt14t column f3
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
 -- check display of whole-row variables in some corner cases
 create type nestedcomposite as (x int8_tbl);
 create view tt15v as select row(i)::nestedcomposite from int8_tbl i;
