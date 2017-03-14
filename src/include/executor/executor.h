@@ -70,8 +70,8 @@
  * now it's just a macro invoking the function pointed to by an ExprState
  * node.  Beware of double evaluation of the ExprState argument!
  */
-#define ExecEvalExpr(expr, econtext, isNull) \
-	((*(expr)->evalfunc) (expr, econtext, isNull))
+#define ExecEvalExpr(state, econtext, isNull) \
+	(state)->evalfunc((state), econtext, isNull)
 
 
 /* Hook for plugins to get control in ExecutorStart() */
@@ -247,23 +247,118 @@ extern Datum GetAttributeByNum(HeapTupleHeader tuple, AttrNumber attrno,
 				  bool *isNull);
 extern Datum GetAttributeByName(HeapTupleHeader tuple, const char *attname,
 				   bool *isNull);
-extern Tuplestorestate *ExecMakeTableFunctionResult(ExprState *funcexpr,
+extern Tuplestorestate *ExecMakeTableFunctionResult(SetExprState *setexpr,
 							ExprContext *econtext,
 							MemoryContext argContext,
 							TupleDesc expectedDesc,
 							bool randomAccess);
-extern Datum ExecMakeFunctionResultSet(FuncExprState *fcache,
+extern Datum ExecMakeFunctionResultSet(SetExprState *setexpr,
 						  ExprContext *econtext,
 						  bool *isNull,
 						  ExprDoneCond *isDone);
-extern Datum ExecEvalExprSwitchContext(ExprState *expression, ExprContext *econtext,
-						  bool *isNull);
+extern SetExprState *ExecInitFunctionResultSet(Expr *expr, ExprContext *econtext, PlanState *parent);
+extern SetExprState *ExecInitTableFunctionResult(Expr *expr, ExprContext *econtext, PlanState *parent);
+
+/*
+ * prototypes from functions in execExpr.c
+ */
 extern ExprState *ExecInitExpr(Expr *node, PlanState *parent);
+extern List *ExecInitExprList(List *nodes, PlanState *parent);
 extern ExprState *ExecPrepareExpr(Expr *node, EState *estate);
-extern bool ExecQual(List *qual, ExprContext *econtext, bool resultForNull);
+extern List *ExecPrepareExprList(List *nodes, EState *estate);
+extern ExprState *ExecPrepareQual(List *qual, EState *estate);
+extern ExprState *ExecPrepareCheck(List *qual, EState *estate);
+extern ExprState *ExecInitQual(List *qual, PlanState *parent);
+extern ExprState *ExecInitCheck(List *qual, PlanState *parent);
+
+extern bool ExecCheck(ExprState *state, ExprContext *context);
 extern int	ExecTargetListLength(List *targetlist);
 extern int	ExecCleanTargetListLength(List *targetlist);
-extern TupleTableSlot *ExecProject(ProjectionInfo *projInfo);
+
+/*
+ * ExecEvalExprSwitchContext
+ *
+ * Same as ExecEvalExpr, but get into the right allocation context explicitly.
+ */
+#ifndef FRONTEND
+static inline Datum
+ExecEvalExprSwitchContext(ExprState *state,
+						  ExprContext *econtext,
+						  bool *isNull)
+{
+	Datum		retDatum;
+	MemoryContext oldContext;
+
+	oldContext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
+	retDatum = ExecEvalExpr(state, econtext, isNull);
+	MemoryContextSwitchTo(oldContext);
+	return retDatum;
+}
+#endif
+
+/*
+ * ExecProject
+ *
+ * Projects a tuple based on projection info and stores it in the slot passed
+ * to ExecBuildProjectInfo().
+ *
+ * Note: the result is always a virtual tuple; therefore it may reference the
+ * contents of the exprContext's scan tuples and/or temporary results
+ * constructed in the exprContext.  If the caller wishes the result to be
+ * valid longer than that data will be valid, he must call ExecMaterializeSlot
+ * on the result slot.
+ */
+#ifndef FRONTEND
+static inline TupleTableSlot *
+ExecProject(ProjectionInfo *projInfo)
+{
+	bool		isnull;
+	ExprContext *econtext = projInfo->pi_exprContext;
+	ExprState  *state = &projInfo->pi_state;
+	TupleTableSlot *slot = state->resultslot;
+
+	/*
+	 * Clear any former contents of the result slot.  This makes it safe for
+	 * us to use the slot's Datum/isnull arrays as workspace.
+	 */
+	ExecClearTuple(slot);
+
+	ExecEvalExprSwitchContext(state, econtext, &isnull);
+
+	/*
+	 * Successfully formed a result row.  Mark the result slot as containing a
+	 * valid virtual tuple.
+	 */
+	slot->tts_isempty = false;
+	slot->tts_nvalid = slot->tts_tupleDescriptor->natts;
+
+	return slot;
+}
+#endif
+
+/*
+ * ExecQual - evaluate a qual prepared with ExecInitQual (possibly via
+ * ExecPrepareQual).
+ */
+#ifndef FRONTEND
+static inline bool
+ExecQual(ExprState *state, ExprContext *econtext)
+{
+	bool		isnull;
+	Datum		ret;
+
+	/* short-circuit (here and in ExecInitQual) for empty restriction list */
+	if (state == NULL)
+		return true;
+
+	ret = ExecEvalExprSwitchContext(state, econtext, &isnull);
+
+	/* EEO_QUAL should never return NULL */
+	Assert(!isnull);
+
+	return DatumGetBool(ret);
+}
+#endif
 
 /*
  * prototypes from functions in execScan.c
@@ -361,6 +456,7 @@ extern void ExecGetLastAttnums(Node *node,
 extern ProjectionInfo *ExecBuildProjectionInfo(List *targetList,
 						ExprContext *econtext,
 						TupleTableSlot *slot,
+						PlanState *planstate,
 						TupleDesc inputDesc);
 extern void ExecAssignProjectionInfo(PlanState *planstate,
 						 TupleDesc inputDesc);
