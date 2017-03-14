@@ -47,7 +47,14 @@
 #include "utils/rel.h"
 
 
-static bool get_last_attnums(Node *node, ProjectionInfo *projInfo);
+typedef struct LastAttnumInfo
+{
+	AttrNumber last_outer;
+	AttrNumber last_inner;
+	AttrNumber last_scan;
+} LastAttnumInfo;
+
+
 static void ShutdownExprContext(ExprContext *econtext, bool isCommit);
 
 
@@ -580,7 +587,10 @@ ExecBuildProjectionInfo(List *targetList,
 			/* Not a simple variable, add it to generic targetlist */
 			exprlist = lappend(exprlist, gstate);
 			/* Examine expr to include contained Vars in lastXXXVar counts */
-			get_last_attnums((Node *) variable, projInfo);
+			ExecGetLastAttnums((Node *) variable,
+							   &projInfo->pi_lastOuterVar,
+							   &projInfo->pi_lastInnerVar,
+							   &projInfo->pi_lastScanVar);
 		}
 	}
 	projInfo->pi_targetlist = exprlist;
@@ -591,13 +601,10 @@ ExecBuildProjectionInfo(List *targetList,
 }
 
 /*
- * get_last_attnums: expression walker for ExecBuildProjectionInfo
- *
- *	Update the lastXXXVar counts to be at least as large as the largest
- *	attribute numbers found in the expression
+ * get_last_attnums_walker: expression walker for ExecGetLastAttnums.
  */
 static bool
-get_last_attnums(Node *node, ProjectionInfo *projInfo)
+get_last_attnums_walker(Node *node, LastAttnumInfo *info)
 {
 	if (node == NULL)
 		return false;
@@ -609,21 +616,17 @@ get_last_attnums(Node *node, ProjectionInfo *projInfo)
 		switch (variable->varno)
 		{
 			case INNER_VAR:
-				if (projInfo->pi_lastInnerVar < attnum)
-					projInfo->pi_lastInnerVar = attnum;
+				info->last_inner = Max(info->last_inner, attnum);
 				break;
 
 			case OUTER_VAR:
-				if (projInfo->pi_lastOuterVar < attnum)
-					projInfo->pi_lastOuterVar = attnum;
+				info->last_outer = Max(info->last_outer, attnum);
 				break;
 
 				/* INDEX_VAR is handled by default case */
 
 			default:
-				if (projInfo->pi_lastScanVar < attnum)
-					projInfo->pi_lastScanVar = attnum;
-				break;
+				info->last_scan = Max(info->last_scan, attnum);
 		}
 		return false;
 	}
@@ -640,9 +643,34 @@ get_last_attnums(Node *node, ProjectionInfo *projInfo)
 		return false;
 	if (IsA(node, GroupingFunc))
 		return false;
-	return expression_tree_walker(node, get_last_attnums,
-								  (void *) projInfo);
+	return expression_tree_walker(node, get_last_attnums_walker,
+								  (void *) info);
 }
+
+/* ----------------
+ *		ExecGetLastAttnums
+ *
+ * Updates, if non-NULL, each of the integers pointed to by last_xxx to be at
+ * least as large as the largest corresponding attribute number in the
+ * expression `node`.  NB: this means that *last_xxx has to be initialized to
+ * a meaningful value.
+ * ----------------
+ */
+void
+ExecGetLastAttnums(Node *node, int *last_outer, int *last_inner,
+				   int *last_scan)
+{
+	LastAttnumInfo info = {0,0,0};
+
+	get_last_attnums_walker(node, &info);
+	if (last_outer && *last_outer < info.last_outer)
+		*last_outer = info.last_outer;
+	if (last_inner && *last_inner < info.last_inner)
+		*last_inner = info.last_inner;
+	if (last_scan && *last_scan < info.last_scan)
+		*last_scan = info.last_scan;
+}
+
 
 /* ----------------
  *		ExecAssignProjectionInfo

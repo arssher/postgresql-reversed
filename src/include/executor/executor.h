@@ -354,6 +354,10 @@ extern void ExecAssignExprContext(EState *estate, PlanState *planstate);
 extern void ExecAssignResultType(PlanState *planstate, TupleDesc tupDesc);
 extern void ExecAssignResultTypeFromTL(PlanState *planstate);
 extern TupleDesc ExecGetResultType(PlanState *planstate);
+extern void ExecGetLastAttnums(Node *node,
+				   int *last_outer,
+				   int *last_inner,
+				   int *last_scan);
 extern ProjectionInfo *ExecBuildProjectionInfo(List *targetList,
 						ExprContext *econtext,
 						TupleTableSlot *slot,
