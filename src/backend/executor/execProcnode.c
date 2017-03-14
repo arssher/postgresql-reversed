@@ -193,6 +193,11 @@ ExecInitNode(Plan *node, EState *estate, int eflags, PlanState *parent)
 		/*
 		 * materialization nodes
 		 */
+		case T_Sort:
+			result = (PlanState *) ExecInitSort((Sort *) node,
+												estate, eflags, parent);
+			break;
+
 		case T_Agg:
 			result = (PlanState *) ExecInitAgg((Agg *) node,
 											   estate, eflags, parent);
@@ -288,6 +293,9 @@ ExecPushTuple(TupleTableSlot *slot, PlanState *pusher)
 	if (nodeTag(receiver) == T_LimitState)
 		return ExecPushTupleToLimit(slot, (LimitState *) receiver);
 
+	else if (nodeTag(receiver) == T_SortState)
+		return ExecPushTupleToSort(slot, (SortState *) receiver);
+
 	else if (nodeTag(receiver) == T_AggState)
 		return ExecPushTupleToAgg(slot, (AggState *) receiver);
 
@@ -333,6 +341,9 @@ ExecPushNull(TupleTableSlot *slot, PlanState *pusher)
 
 	if (nodeTag(receiver) == T_LimitState)
 		return ExecPushNullToLimit(slot, (LimitState *) receiver);
+
+	else if (nodeTag(receiver) == T_SortState)
+		return ExecPushNullToSort(slot, (SortState *) receiver);
 
 	else if (nodeTag(receiver) == T_AggState)
 		return ExecPushNullToAgg(slot, (AggState *) receiver);
@@ -410,6 +421,10 @@ ExecEndNode(PlanState *node)
 		/*
 		 * materialization nodes
 		 */
+		case T_SortState:
+			ExecEndSort((SortState *) node);
+			break;
+
 		case T_AggState:
 			ExecEndAgg((AggState *) node);
 			break;

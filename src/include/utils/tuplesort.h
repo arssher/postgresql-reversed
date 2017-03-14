@@ -92,6 +92,9 @@ extern void tuplesort_putdatum(Tuplesortstate *state, Datum val,
 
 extern void tuplesort_performsort(Tuplesortstate *state);
 
+/* forward decl, since now we need to know about SortState */
+typedef struct SortState SortState;
+extern void tuplesort_pushtuples(Tuplesortstate *state, SortState *node);
 extern bool tuplesort_gettupleslot(Tuplesortstate *state, bool forward,
 					   TupleTableSlot *slot, Datum *abbrev);
 extern HeapTuple tuplesort_getheaptuple(Tuplesortstate *state, bool forward);
