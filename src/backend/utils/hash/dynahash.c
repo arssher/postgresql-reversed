@@ -1456,6 +1456,61 @@ hash_freeze(HTAB *hashp)
 	hashp->frozen = true;
 }
 
+/*
+ * hash_foreach
+ *			Do something with each entry. For now AggPushTuple is hardcoded,
+ *			but in fact this function doesn't care about exact action.
+ */
+void hash_foreach(HTAB *hashp)
+{
+	uint32		curBucket = 0;
+	HASHELEMENT *curElem = NULL;
+	HASHHDR	   *hctl = hashp->hctl;
+	uint32		max_bucket = hctl->max_bucket;
+	long		ssize = hashp->ssize;
+	long		segment_num;
+	long		segment_ndx;
+	HASHSEGMENT segp;
+
+	while (curBucket <= max_bucket)
+	{
+		/*
+		 * Search for next nonempty bucket starting at curBucket.
+		 * first find the right segment in the table directory.
+		 */
+		segment_num = curBucket >> hashp->sshift;
+		segment_ndx = MOD(curBucket, ssize);
+
+		segp = hashp->dir[segment_num];
+
+		/*
+		 * Pick up the first item in this bucket's chain.  If chain is not
+		 * empty we can begin searching it.  Otherwise we have to advance to
+		 * find the next nonempty bucket.  We try to optimize that case since
+		 * searching a near-empty hashtable has to iterate this loop a lot.
+		 */
+		while ((curElem = segp[segment_ndx]) == NULL)
+		{
+			/* empty bucket, advance to next */
+			if (++curBucket > max_bucket)
+				return;  /* search is done */
+			if (++segment_ndx >= ssize)
+			{
+				segment_num++;
+				segment_ndx = 0;
+				segp = hashp->dir[segment_num];
+			}
+		}
+
+		/* Ok, first element is found, scan curBucket... */
+		do
+		{
+			AggPushTuple((void *) ELEMENTKEY(curElem));
+			curElem = curElem->link;
+		} while (curElem != NULL);
+		++curBucket;
+	}
+}
 
 /********************************* UTILITIES ************************/
 
