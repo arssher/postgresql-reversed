@@ -687,6 +687,9 @@
 /* Define to 1 if your compiler understands __builtin_unreachable. */
 #undef HAVE__BUILTIN_UNREACHABLE
 
+/* Define to 1 if your compiler handles computed gotos. */
+#undef HAVE__COMPUTED_GOTO
+
 /* Define to 1 if you have __cpuid. */
 #undef HAVE__CPUID
 
