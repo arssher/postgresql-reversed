@@ -1958,6 +1958,9 @@ typedef struct AggStatePerTransData *AggStatePerTrans;
 typedef struct AggStatePerGroupData *AggStatePerGroup;
 typedef struct AggStatePerPhaseData *AggStatePerPhase;
 
+/* forward decl, since now tuplesort.h and execnodes.h include each other */
+typedef struct Tuplesortstate Tuplesortstate;
+
 typedef struct AggState
 {
 	ScanState	ss;				/* its first field is NodeTag */
