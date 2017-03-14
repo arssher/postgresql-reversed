@@ -206,6 +206,9 @@ static bool object_address_present_add_flags(const ObjectAddress *object,
 static bool stack_address_present_add_flags(const ObjectAddress *object,
 								int flags,
 								ObjectAddressStack *stack);
+static void add_type_addresses(Oid typeid, bool include_components, ObjectAddresses *addrs);
+static void add_type_component_addresses(Oid typeid, ObjectAddresses *addrs);
+static void add_class_component_addresses(Oid relid, ObjectAddresses *addrs);
 static void DeleteInitPrivs(const ObjectAddress *object);
 
 
@@ -1364,10 +1367,8 @@ recordDependencyOnExpr(const ObjectAddress *depender,
  * whereas 'behavior' is used for everything else.
  *
  * NOTE: the caller should ensure that a whole-table dependency on the
- * specified relation is created separately, if one is needed.  In particular,
- * a whole-row Var "relation.*" will not cause this routine to emit any
- * dependency item.  This is appropriate behavior for subexpressions of an
- * ordinary query, so other cases need to cope as necessary.
+ * specified relation is created separately, if one is needed.  E.g. SELECT
+ * FROM tbl will not cause this routine to emit any dependency items.
  */
 void
 recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
@@ -1484,19 +1485,23 @@ find_expr_references_walker(Node *node,
 			elog(ERROR, "invalid varno %d", var->varno);
 		rte = rt_fetch(var->varno, rtable);
 
-		/*
-		 * A whole-row Var references no specific columns, so adds no new
-		 * dependency.  (We assume that there is a whole-table dependency
-		 * arising from each underlying rangetable entry.  While we could
-		 * record such a dependency when finding a whole-row Var that
-		 * references a relation directly, it's quite unclear how to extend
-		 * that to whole-row Vars for JOINs, so it seems better to leave the
-		 * responsibility with the range table.  Note that this poses some
-		 * risks for identifying dependencies of stand-alone expressions:
-		 * whole-table references may need to be created separately.)
-		 */
 		if (var->varattno == InvalidAttrNumber)
-			return false;
+		{
+			/*
+			 * A whole-row Var essentially references all current columns, so
+			 * add dependencies for them - that allow adding new columns to
+			 * the type, but not removing or altering the type of existing
+			 * columns.
+			 *
+			 * That does not obviate the need for a whole-table dependency
+			 * arising from each underlying rangetable entry - this would
+			 * e.g. not do the right thing for column-less tables.  Note that
+			 * this requires some care for identifying dependencies of
+			 * stand-alone expressions: whole-table references may need to be
+			 * created separately.
+			 */
+			add_class_component_addresses(rte->relid, context->addrs);
+		}
 		if (rte->rtekind == RTE_RELATION)
 		{
 			/* If it's a plain relation, reference this column */
@@ -1529,8 +1534,7 @@ find_expr_references_walker(Node *node,
 		Oid			objoid;
 
 		/* A constant must depend on the constant's datatype */
-		add_object_address(OCLASS_TYPE, con->consttype, 0,
-						   context->addrs);
+		add_type_addresses(con->consttype, true, context->addrs);
 
 		/*
 		 * We must also depend on the constant's collation: it could be
@@ -1580,8 +1584,7 @@ find_expr_references_walker(Node *node,
 					objoid = DatumGetObjectId(con->constvalue);
 					if (SearchSysCacheExists1(TYPEOID,
 											  ObjectIdGetDatum(objoid)))
-						add_object_address(OCLASS_TYPE, objoid, 0,
-										   context->addrs);
+						add_type_addresses(objoid, false, context->addrs);
 					break;
 				case REGCONFIGOID:
 					objoid = DatumGetObjectId(con->constvalue);
@@ -1625,8 +1628,7 @@ find_expr_references_walker(Node *node,
 		Param	   *param = (Param *) node;
 
 		/* A parameter must depend on the parameter's datatype */
-		add_object_address(OCLASS_TYPE, param->paramtype, 0,
-						   context->addrs);
+		add_type_addresses(param->paramtype, true, context->addrs);
 		/* and its collation, just as for Consts */
 		if (OidIsValid(param->paramcollid) &&
 			param->paramcollid != DEFAULT_COLLATION_OID)
@@ -1639,6 +1641,9 @@ find_expr_references_walker(Node *node,
 
 		add_object_address(OCLASS_PROC, funcexpr->funcid, 0,
 						   context->addrs);
+		/* dependency on type itself already exists via function */
+		add_type_component_addresses(funcexpr->funcresulttype, context->addrs);
+
 		/* fall through to examine arguments */
 	}
 	else if (IsA(node, OpExpr))
@@ -1647,6 +1652,9 @@ find_expr_references_walker(Node *node,
 
 		add_object_address(OCLASS_OPERATOR, opexpr->opno, 0,
 						   context->addrs);
+		/* dependency on type itself already exists via function */
+		add_type_component_addresses(opexpr->opresulttype, context->addrs);
+
 		/* fall through to examine arguments */
 	}
 	else if (IsA(node, DistinctExpr))
@@ -1655,6 +1663,13 @@ find_expr_references_walker(Node *node,
 
 		add_object_address(OCLASS_OPERATOR, distinctexpr->opno, 0,
 						   context->addrs);
+		/*
+		 * Dependency on type itself already exists via function. Be paranoid
+		 * and add deps to return type components (unlikely to matter due to
+		 * return type, but ...)
+		 */
+		add_type_component_addresses(distinctexpr->opresulttype,
+									 context->addrs);
 		/* fall through to examine arguments */
 	}
 	else if (IsA(node, NullIfExpr))
@@ -1663,6 +1678,7 @@ find_expr_references_walker(Node *node,
 
 		add_object_address(OCLASS_OPERATOR, nullifexpr->opno, 0,
 						   context->addrs);
+		/* can't add new type dependencies */
 		/* fall through to examine arguments */
 	}
 	else if (IsA(node, ScalarArrayOpExpr))
@@ -1679,6 +1695,7 @@ find_expr_references_walker(Node *node,
 
 		add_object_address(OCLASS_PROC, aggref->aggfnoid, 0,
 						   context->addrs);
+		add_type_component_addresses(aggref->aggtype, context->addrs);
 		/* fall through to examine arguments */
 	}
 	else if (IsA(node, WindowFunc))
@@ -1687,6 +1704,7 @@ find_expr_references_walker(Node *node,
 
 		add_object_address(OCLASS_PROC, wfunc->winfnoid, 0,
 						   context->addrs);
+		add_type_component_addresses(wfunc->wintype, context->addrs);
 		/* fall through to examine arguments */
 	}
 	else if (IsA(node, SubPlan))
@@ -1699,8 +1717,8 @@ find_expr_references_walker(Node *node,
 		RelabelType *relab = (RelabelType *) node;
 
 		/* since there is no function dependency, need to depend on type */
-		add_object_address(OCLASS_TYPE, relab->resulttype, 0,
-						   context->addrs);
+		add_type_addresses(relab->resulttype, false, context->addrs);
+
 		/* the collation might not be referenced anywhere else, either */
 		if (OidIsValid(relab->resultcollid) &&
 			relab->resultcollid != DEFAULT_COLLATION_OID)
@@ -1712,8 +1730,7 @@ find_expr_references_walker(Node *node,
 		CoerceViaIO *iocoerce = (CoerceViaIO *) node;
 
 		/* since there is no exposed function, need to depend on type */
-		add_object_address(OCLASS_TYPE, iocoerce->resulttype, 0,
-						   context->addrs);
+		add_type_addresses(iocoerce->resulttype, true, context->addrs);
 	}
 	else if (IsA(node, ArrayCoerceExpr))
 	{
@@ -1722,8 +1739,7 @@ find_expr_references_walker(Node *node,
 		if (OidIsValid(acoerce->elemfuncid))
 			add_object_address(OCLASS_PROC, acoerce->elemfuncid, 0,
 							   context->addrs);
-		add_object_address(OCLASS_TYPE, acoerce->resulttype, 0,
-						   context->addrs);
+		add_type_addresses(acoerce->resulttype, true, context->addrs);
 		/* fall through to examine arguments */
 	}
 	else if (IsA(node, ConvertRowtypeExpr))
@@ -1731,8 +1747,7 @@ find_expr_references_walker(Node *node,
 		ConvertRowtypeExpr *cvt = (ConvertRowtypeExpr *) node;
 
 		/* since there is no function dependency, need to depend on type */
-		add_object_address(OCLASS_TYPE, cvt->resulttype, 0,
-						   context->addrs);
+		add_type_addresses(cvt->resulttype, true, context->addrs);
 	}
 	else if (IsA(node, CollateExpr))
 	{
@@ -1745,8 +1760,7 @@ find_expr_references_walker(Node *node,
 	{
 		RowExpr    *rowexpr = (RowExpr *) node;
 
-		add_object_address(OCLASS_TYPE, rowexpr->row_typeid, 0,
-						   context->addrs);
+		add_type_addresses(rowexpr->row_typeid, true, context->addrs);
 	}
 	else if (IsA(node, RowCompareExpr))
 	{
@@ -1769,8 +1783,7 @@ find_expr_references_walker(Node *node,
 	{
 		CoerceToDomain *cd = (CoerceToDomain *) node;
 
-		add_object_address(OCLASS_TYPE, cd->resulttype, 0,
-						   context->addrs);
+		add_type_addresses(cd->resulttype, true, context->addrs);
 	}
 	else if (IsA(node, OnConflictExpr))
 	{
@@ -1898,13 +1911,13 @@ find_expr_references_walker(Node *node,
 
 		/*
 		 * Add refs for any datatypes and collations used in a column
-		 * definition list for a RECORD function.  (For other cases, it should
-		 * be enough to depend on the function itself.)
+		 * definition list for a RECORD function.  Additional dependencies
+		 * will possibly be added when recursing to the contained function
+		 * expression.
 		 */
 		foreach(ct, rtfunc->funccoltypes)
 		{
-			add_object_address(OCLASS_TYPE, lfirst_oid(ct), 0,
-							   context->addrs);
+			add_type_addresses(lfirst_oid(ct), true, context->addrs);
 		}
 		foreach(ct, rtfunc->funccolcollations)
 		{
@@ -2225,6 +2238,62 @@ object_address_present_add_flags(const ObjectAddress *object,
 	}
 
 	return result;
+}
+
+/*
+ * Add ObjectAddresses entry for typeid and, if include_components = true and
+ * and the type is a composite type, for it's columns.
+ */
+static void
+add_type_addresses(Oid typeid, bool include_components, ObjectAddresses *addrs)
+{
+	add_object_address(OCLASS_TYPE, typeid, 0, addrs);
+
+	if (include_components)
+	{
+		add_type_component_addresses(typeid, addrs);
+	}
+}
+
+/*
+ * Add ObjectAddresses entry for the type's columns if it's a composite type.
+ *
+ * Besides being a helper for add_type_addresses it can make sense to add
+ * dependencies on the components if, as e.g. the case for a function return
+ * type, there already exists a dependency on the type, but not the typ's
+ * components.
+ */
+static void
+add_type_component_addresses(Oid typeid, ObjectAddresses *addrs)
+{
+	Oid typerelid = get_typ_typrelid(typeid);
+
+	if (typerelid != InvalidOid)
+	{
+		add_class_component_addresses(typerelid, addrs);
+	}
+}
+
+/*
+ * Add ObjectAddresses entries for the relation's columns.
+ */
+static void
+add_class_component_addresses(Oid relid, ObjectAddresses *addrs)
+{
+	Relation rel = relation_open(relid, NoLock);
+	TupleDesc tupDesc = RelationGetDescr(rel);
+	int i;
+
+	for (i = 0; i < tupDesc->natts; i++)
+	{
+		Form_pg_attribute att = tupDesc->attrs[i];
+
+		if (att->attisdropped)
+			continue;
+
+		add_object_address(OCLASS_CLASS, relid, att->attnum, addrs);
+	}
+	relation_close(rel, NoLock);
 }
 
 /*

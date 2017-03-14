@@ -483,12 +483,8 @@ create view tt14v as select t.* from tt14f() t;
 select pg_get_viewdef('tt14v', true);
 select * from tt14v;
 
--- this perhaps should be rejected, but it isn't:
+-- this will be rejected as the column is referenced in the view:
 alter table tt14t drop column f3;
-
--- f3 is still in the view but will read as nulls
-select pg_get_viewdef('tt14v', true);
-select * from tt14v;
 
 -- check display of whole-row variables in some corner cases
 

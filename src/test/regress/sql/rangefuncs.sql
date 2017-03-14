@@ -551,19 +551,35 @@ SELECT * FROM get_users() WITH ORDINALITY;   -- make sure ordinality copes
 SELECT * FROM ROWS FROM(generate_series(10,11), get_users()) WITH ORDINALITY;
 SELECT * FROM ROWS FROM(get_users(), generate_series(10,11)) WITH ORDINALITY;
 
--- check that we can cope with post-parsing changes in rowtypes
 create temp view usersview as
 SELECT * FROM ROWS FROM(get_users(), generate_series(10,11)) WITH ORDINALITY;
 
+create temp view usersview2 as
+SELECT * FROM (SELECT get_users()) f;
+
+create temp view usersview3 as
+SELECT * FROM (SELECT users FROM users) f;
+
+-- check that rowtypes referenced in views can't be dropped / changed
 select * from usersview;
+select * from usersview2;
 alter table users drop column moredrop;
+alter table users alter column seq type numeric;
 select * from usersview;
+select * from usersview2;
+select * from usersview3;
+
+-- check that column additions are handled properly
 alter table users add column junk text;
 select * from usersview;
-alter table users alter column seq type numeric;
-select * from usersview;  -- expect clean failure
+select * from usersview2;
+select * from usersview3;
 
-drop view usersview;
+-- check that cascade is handled properly
+alter table users drop column moredrop CASCADE;
+-- should all be gone now
+\dv usersview*
+
 drop function get_first_user();
 drop function get_users();
 drop table users;

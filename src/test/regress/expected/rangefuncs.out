@@ -1899,9 +1899,13 @@ SELECT * FROM ROWS FROM(get_users(), generate_series(10,11)) WITH ORDINALITY;
  id2    |   2 | email2 |       12 | t       |              11 |          2
 (2 rows)
 
--- check that we can cope with post-parsing changes in rowtypes
 create temp view usersview as
 SELECT * FROM ROWS FROM(get_users(), generate_series(10,11)) WITH ORDINALITY;
+create temp view usersview2 as
+SELECT * FROM (SELECT get_users()) f;
+create temp view usersview3 as
+SELECT * FROM (SELECT users FROM users) f;
+-- check that rowtypes referenced in views can't be dropped / changed
 select * from usersview;
  userid | seq | email  | moredrop | enabled | generate_series | ordinality 
 --------+-----+--------+----------+---------+-----------------+------------
@@ -1909,27 +1913,79 @@ select * from usersview;
  id2    |   2 | email2 |       12 | t       |              11 |          2
 (2 rows)
 
+select * from usersview2;
+      get_users      
+---------------------
+ (id,1,email,11,t)
+ (id2,2,email2,12,t)
+(2 rows)
+
 alter table users drop column moredrop;
+ERROR:  cannot drop table users column moredrop because other objects depend on it
+DETAIL:  view usersview depends on table users column moredrop
+view usersview2 depends on table users column moredrop
+view usersview3 depends on table users column moredrop
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+alter table users alter column seq type numeric;
+ERROR:  cannot alter type of a column used by a view or rule
+DETAIL:  rule _RETURN on view usersview3 depends on column "seq"
 select * from usersview;
  userid | seq | email  | moredrop | enabled | generate_series | ordinality 
 --------+-----+--------+----------+---------+-----------------+------------
- id     |   1 | email  |          | t       |              10 |          1
- id2    |   2 | email2 |          | t       |              11 |          2
+ id     |   1 | email  |       11 | t       |              10 |          1
+ id2    |   2 | email2 |       12 | t       |              11 |          2
 (2 rows)
 
+select * from usersview2;
+      get_users      
+---------------------
+ (id,1,email,11,t)
+ (id2,2,email2,12,t)
+(2 rows)
+
+select * from usersview3;
+        users        
+---------------------
+ (id,1,email,11,t)
+ (id2,2,email2,12,t)
+(2 rows)
+
+-- check that column additions are handled properly
 alter table users add column junk text;
 select * from usersview;
  userid | seq | email  | moredrop | enabled | generate_series | ordinality 
 --------+-----+--------+----------+---------+-----------------+------------
- id     |   1 | email  |          | t       |              10 |          1
- id2    |   2 | email2 |          | t       |              11 |          2
+ id     |   1 | email  |       11 | t       |              10 |          1
+ id2    |   2 | email2 |       12 | t       |              11 |          2
 (2 rows)
 
-alter table users alter column seq type numeric;
-select * from usersview;  -- expect clean failure
-ERROR:  attribute 2 has wrong type
-DETAIL:  Table has type numeric, but query expects integer.
-drop view usersview;
+select * from usersview2;
+      get_users       
+----------------------
+ (id,1,email,11,t,)
+ (id2,2,email2,12,t,)
+(2 rows)
+
+select * from usersview3;
+        users         
+----------------------
+ (id,1,email,11,t,)
+ (id2,2,email2,12,t,)
+(2 rows)
+
+-- check that cascade is handled properly
+alter table users drop column moredrop CASCADE;
+NOTICE:  drop cascades to 3 other objects
+DETAIL:  drop cascades to view usersview
+drop cascades to view usersview2
+drop cascades to view usersview3
+-- should all be gone now
+\dv usersview*
+      List of relations
+ Schema | Name | Type | Owner 
+--------+------+------+-------
+(0 rows)
+
 drop function get_first_user();
 drop function get_users();
 drop table users;
