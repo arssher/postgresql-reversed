@@ -1225,7 +1225,7 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 
 		resultRelInfo->ri_TrigFunctions = (FmgrInfo *)
 			palloc0(n * sizeof(FmgrInfo));
-		resultRelInfo->ri_TrigWhenExprs = (List **)
+		resultRelInfo->ri_TrigWhenExprs = (ExprState **)
 			palloc0(n * sizeof(List *));
 		if (instrument_options)
 			resultRelInfo->ri_TrigInstrument = InstrAlloc(n, instrument_options);
@@ -1548,7 +1548,6 @@ ExecRelCheck(ResultRelInfo *resultRelInfo,
 	ConstrCheck *check = rel->rd_att->constr->check;
 	ExprContext *econtext;
 	MemoryContext oldContext;
-	List	   *qual;
 	int			i;
 
 	/*
@@ -1560,13 +1559,15 @@ ExecRelCheck(ResultRelInfo *resultRelInfo,
 	{
 		oldContext = MemoryContextSwitchTo(estate->es_query_cxt);
 		resultRelInfo->ri_ConstraintExprs =
-			(List **) palloc(ncheck * sizeof(List *));
+			(ExprState **) palloc(ncheck * sizeof(ExprState *));
 		for (i = 0; i < ncheck; i++)
 		{
-			/* ExecQual wants implicit-AND form */
+			List	   *qual;
+
+			/* ExecPrepareQual wants implicit-AND form */
 			qual = make_ands_implicit(stringToNode(check[i].ccbin));
-			resultRelInfo->ri_ConstraintExprs[i] = (List *)
-				ExecPrepareExpr((Expr *) qual, estate);
+			resultRelInfo->ri_ConstraintExprs[i] =
+				ExecPrepareCheck(qual, estate);
 		}
 		MemoryContextSwitchTo(oldContext);
 	}
@@ -1583,14 +1584,14 @@ ExecRelCheck(ResultRelInfo *resultRelInfo,
 	/* And evaluate the constraints */
 	for (i = 0; i < ncheck; i++)
 	{
-		qual = resultRelInfo->ri_ConstraintExprs[i];
+		ExprState  *qual = resultRelInfo->ri_ConstraintExprs[i];
 
 		/*
 		 * NOTE: SQL specifies that a NULL result from a constraint expression
-		 * is not to be treated as a failure.  Therefore, tell ExecQual to
-		 * return TRUE for NULL.
+		 * is not to be treated as a failure.  Therefore, use ExecCheck not
+		 * ExecQual.
 		 */
-		if (!ExecQual(qual, econtext, true))
+		if (!ExecCheck(qual, econtext))
 			return check[i].ccname;
 	}
 
@@ -1618,8 +1619,7 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	{
 		List	   *qual = resultRelInfo->ri_PartitionCheck;
 
-		resultRelInfo->ri_PartitionCheckExpr = (List *)
-			ExecPrepareExpr((Expr *) qual, estate);
+		resultRelInfo->ri_PartitionCheckExpr = ExecPrepareCheck(qual, estate);
 	}
 
 	/*
@@ -1635,7 +1635,7 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	 * As in case of the catalogued constraints, we treat a NULL result as
 	 * success here, not a failure.
 	 */
-	return ExecQual(resultRelInfo->ri_PartitionCheckExpr, econtext, true);
+	return ExecCheck(resultRelInfo->ri_PartitionCheckExpr, econtext);
 }
 
 /*
@@ -1815,11 +1815,9 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 		 * is visible (in the case of a view) or that it passes the
 		 * 'with-check' policy (in the case of row security). If the qual
 		 * evaluates to NULL or FALSE, then the new tuple won't be included in
-		 * the view or doesn't pass the 'with-check' policy for the table.  We
-		 * need ExecQual to return FALSE for NULL to handle the view case (the
-		 * opposite of what we do above for CHECK constraints).
+		 * the view or doesn't pass the 'with-check' policy for the table.
 		 */
-		if (!ExecQual((List *) wcoExpr, econtext, false))
+		if (!ExecQual(wcoExpr, econtext))
 		{
 			char	   *val_desc;
 			Bitmapset  *modifiedCols;

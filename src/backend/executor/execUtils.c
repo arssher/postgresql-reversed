@@ -470,136 +470,6 @@ ExecGetResultType(PlanState *planstate)
 	return slot->tts_tupleDescriptor;
 }
 
-/* ----------------
- *		ExecBuildProjectionInfo
- *
- * Build a ProjectionInfo node for evaluating the given tlist in the given
- * econtext, and storing the result into the tuple slot.  (Caller must have
- * ensured that tuple slot has a descriptor matching the tlist!)  Note that
- * the given tlist should be a list of ExprState nodes, not Expr nodes.
- *
- * inputDesc can be NULL, but if it is not, we check to see whether simple
- * Vars in the tlist match the descriptor.  It is important to provide
- * inputDesc for relation-scan plan nodes, as a cross check that the relation
- * hasn't been changed since the plan was made.  At higher levels of a plan,
- * there is no need to recheck.
- * ----------------
- */
-ProjectionInfo *
-ExecBuildProjectionInfo(List *targetList,
-						ExprContext *econtext,
-						TupleTableSlot *slot,
-						TupleDesc inputDesc)
-{
-	ProjectionInfo *projInfo = makeNode(ProjectionInfo);
-	int			len = ExecTargetListLength(targetList);
-	int		   *workspace;
-	int		   *varSlotOffsets;
-	int		   *varNumbers;
-	int		   *varOutputCols;
-	List	   *exprlist;
-	int			numSimpleVars;
-	bool		directMap;
-	ListCell   *tl;
-
-	projInfo->pi_exprContext = econtext;
-	projInfo->pi_slot = slot;
-	/* since these are all int arrays, we need do just one palloc */
-	workspace = (int *) palloc(len * 3 * sizeof(int));
-	projInfo->pi_varSlotOffsets = varSlotOffsets = workspace;
-	projInfo->pi_varNumbers = varNumbers = workspace + len;
-	projInfo->pi_varOutputCols = varOutputCols = workspace + len * 2;
-	projInfo->pi_lastInnerVar = 0;
-	projInfo->pi_lastOuterVar = 0;
-	projInfo->pi_lastScanVar = 0;
-
-	/*
-	 * We separate the target list elements into simple Var references and
-	 * expressions which require the full ExecTargetList machinery.  To be a
-	 * simple Var, a Var has to be a user attribute and not mismatch the
-	 * inputDesc.  (Note: if there is a type mismatch then ExecEvalScalarVar
-	 * will probably throw an error at runtime, but we leave that to it.)
-	 */
-	exprlist = NIL;
-	numSimpleVars = 0;
-	directMap = true;
-	foreach(tl, targetList)
-	{
-		GenericExprState *gstate = (GenericExprState *) lfirst(tl);
-		Var		   *variable = (Var *) gstate->arg->expr;
-		bool		isSimpleVar = false;
-
-		if (variable != NULL &&
-			IsA(variable, Var) &&
-			variable->varattno > 0)
-		{
-			if (!inputDesc)
-				isSimpleVar = true;		/* can't check type, assume OK */
-			else if (variable->varattno <= inputDesc->natts)
-			{
-				Form_pg_attribute attr;
-
-				attr = inputDesc->attrs[variable->varattno - 1];
-				if (!attr->attisdropped && variable->vartype == attr->atttypid)
-					isSimpleVar = true;
-			}
-		}
-
-		if (isSimpleVar)
-		{
-			TargetEntry *tle = (TargetEntry *) gstate->xprstate.expr;
-			AttrNumber	attnum = variable->varattno;
-
-			varNumbers[numSimpleVars] = attnum;
-			varOutputCols[numSimpleVars] = tle->resno;
-			if (tle->resno != numSimpleVars + 1)
-				directMap = false;
-
-			switch (variable->varno)
-			{
-				case INNER_VAR:
-					varSlotOffsets[numSimpleVars] = offsetof(ExprContext,
-															 ecxt_innertuple);
-					if (projInfo->pi_lastInnerVar < attnum)
-						projInfo->pi_lastInnerVar = attnum;
-					break;
-
-				case OUTER_VAR:
-					varSlotOffsets[numSimpleVars] = offsetof(ExprContext,
-															 ecxt_outertuple);
-					if (projInfo->pi_lastOuterVar < attnum)
-						projInfo->pi_lastOuterVar = attnum;
-					break;
-
-					/* INDEX_VAR is handled by default case */
-
-				default:
-					varSlotOffsets[numSimpleVars] = offsetof(ExprContext,
-															 ecxt_scantuple);
-					if (projInfo->pi_lastScanVar < attnum)
-						projInfo->pi_lastScanVar = attnum;
-					break;
-			}
-			numSimpleVars++;
-		}
-		else
-		{
-			/* Not a simple variable, add it to generic targetlist */
-			exprlist = lappend(exprlist, gstate);
-			/* Examine expr to include contained Vars in lastXXXVar counts */
-			ExecGetLastAttnums((Node *) variable,
-							   &projInfo->pi_lastOuterVar,
-							   &projInfo->pi_lastInnerVar,
-							   &projInfo->pi_lastScanVar);
-		}
-	}
-	projInfo->pi_targetlist = exprlist;
-	projInfo->pi_numSimpleVars = numSimpleVars;
-	projInfo->pi_directMap = directMap;
-
-	return projInfo;
-}
-
 /*
  * get_last_attnums_walker: expression walker for ExecGetLastAttnums.
  */
@@ -686,9 +556,10 @@ ExecAssignProjectionInfo(PlanState *planstate,
 						 TupleDesc inputDesc)
 {
 	planstate->ps_ProjInfo =
-		ExecBuildProjectionInfo(planstate->targetlist,
+		ExecBuildProjectionInfo(planstate->plan->targetlist,
 								planstate->ps_ExprContext,
 								planstate->ps_ResultTupleSlot,
+								planstate,
 								inputDesc);
 }
 

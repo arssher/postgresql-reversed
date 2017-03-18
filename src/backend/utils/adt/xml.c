@@ -72,7 +72,6 @@
 #include "catalog/pg_class.h"
 #include "catalog/pg_type.h"
 #include "commands/dbcommands.h"
-#include "executor/executor.h"
 #include "executor/spi.h"
 #include "executor/tablefunc.h"
 #include "fmgr.h"
@@ -620,10 +619,9 @@ xmltotext_with_xmloption(xmltype *data, XmlOptionType xmloption_arg)
 
 
 xmltype *
-xmlelement(XmlExprState *xmlExpr, ExprContext *econtext)
+xmlelement(XmlExpr *xexpr, bool *named_argnull, Datum *named_argvalue, bool *argnull, Datum *argvalue)
 {
 #ifdef USE_LIBXML
-	XmlExpr    *xexpr = (XmlExpr *) xmlExpr->xprstate.expr;
 	xmltype    *result;
 	List	   *named_arg_strings;
 	List	   *arg_strings;
@@ -635,45 +633,40 @@ xmlelement(XmlExprState *xmlExpr, ExprContext *econtext)
 	volatile xmlTextWriterPtr writer = NULL;
 
 	/*
-	 * We first evaluate all the arguments, then start up libxml and create
-	 * the result.  This avoids issues if one of the arguments involves a call
-	 * to some other function or subsystem that wants to use libxml on its own
-	 * terms.
+	 * All arguments are already evaluated.  This avoids issues if one of the
+	 * arguments involves a call to some other function or subsystem that
+	 * wants to use libxml on its own terms.
 	 */
 	named_arg_strings = NIL;
 	i = 0;
-	foreach(arg, xmlExpr->named_args)
+	foreach(arg, xexpr->named_args)
 	{
-		ExprState  *e = (ExprState *) lfirst(arg);
-		Datum		value;
-		bool		isnull;
+		Expr	   *e = (Expr *) lfirst(arg);
 		char	   *str;
 
-		value = ExecEvalExpr(e, econtext, &isnull);
-		if (isnull)
+		if (named_argnull[i])
 			str = NULL;
 		else
-			str = map_sql_value_to_xml_value(value, exprType((Node *) e->expr), false);
+			str = map_sql_value_to_xml_value(named_argvalue[i], exprType((Node *) e), false);
 		named_arg_strings = lappend(named_arg_strings, str);
 		i++;
 	}
 
 	arg_strings = NIL;
-	foreach(arg, xmlExpr->args)
+	i = 0;
+	foreach(arg, xexpr->args)
 	{
-		ExprState  *e = (ExprState *) lfirst(arg);
-		Datum		value;
-		bool		isnull;
+		Expr	   *e = (Expr *) lfirst(arg);
 		char	   *str;
 
-		value = ExecEvalExpr(e, econtext, &isnull);
 		/* here we can just forget NULL elements immediately */
-		if (!isnull)
+		if (!argnull[i])
 		{
-			str = map_sql_value_to_xml_value(value,
-										   exprType((Node *) e->expr), true);
+			str = map_sql_value_to_xml_value(argvalue[i],
+											 exprType((Node *) e), true);
 			arg_strings = lappend(arg_strings, str);
 		}
+		i++;
 	}
 
 	/* now safe to run libxml */

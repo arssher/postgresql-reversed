@@ -123,7 +123,7 @@ ExecScan(ScanState *node,
 		 ExecScanRecheckMtd recheckMtd)
 {
 	ExprContext *econtext;
-	List	   *qual;
+	ExprState *qual;
 	ProjectionInfo *projInfo;
 
 	/*
@@ -170,7 +170,7 @@ ExecScan(ScanState *node,
 		if (TupIsNull(slot))
 		{
 			if (projInfo)
-				return ExecClearTuple(projInfo->pi_slot);
+				return ExecClearTuple(projInfo->pi_state.resultslot);
 			else
 				return slot;
 		}
@@ -187,7 +187,7 @@ ExecScan(ScanState *node,
 		 * when the qual is nil ... saves only a few cycles, but they add up
 		 * ...
 		 */
-		if (!qual || ExecQual(qual, econtext, false))
+		if (!qual || ExecQual(qual, econtext))
 		{
 			/*
 			 * Found a satisfactory scan tuple.

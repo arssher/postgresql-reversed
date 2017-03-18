@@ -363,19 +363,13 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags, PlanState *parent)
 	/*
 	 * initialize child expressions
 	 */
-	hjstate->js.ps.targetlist = (List *)
-		ExecInitExpr((Expr *) node->join.plan.targetlist,
-					 (PlanState *) hjstate);
-	hjstate->js.ps.qual = (List *)
-		ExecInitExpr((Expr *) node->join.plan.qual,
-					 (PlanState *) hjstate);
+	hjstate->js.ps.qual =
+		ExecInitQual(node->join.plan.qual, (PlanState *) hjstate);
 	hjstate->js.jointype = node->join.jointype;
-	hjstate->js.joinqual = (List *)
-		ExecInitExpr((Expr *) node->join.joinqual,
-					 (PlanState *) hjstate);
-	hjstate->hashclauses = (List *)
-		ExecInitExpr((Expr *) node->hashclauses,
-					 (PlanState *) hjstate);
+	hjstate->js.joinqual =
+		ExecInitQual(node->join.joinqual, (PlanState *) hjstate);
+	hjstate->hashclauses =
+		ExecInitQual(node->hashclauses, (PlanState *) hjstate);
 
 	/*
 	 * initialize child nodes
@@ -471,13 +465,13 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags, PlanState *parent)
 	lclauses = NIL;
 	rclauses = NIL;
 	hoperators = NIL;
-	foreach(l, hjstate->hashclauses)
+	foreach(l, node->hashclauses)
 	{
-		FuncExprState *fstate = castNode(FuncExprState, lfirst(l));
-		OpExpr	   *hclause = castNode(OpExpr, fstate->xprstate.expr);
+		OpExpr	   *hclause =  castNode(OpExpr, lfirst(l));
 
-		lclauses = lappend(lclauses, linitial(fstate->args));
-		rclauses = lappend(rclauses, lsecond(fstate->args));
+		lclauses = lappend(lclauses, ExecInitExpr(linitial(hclause->args), (PlanState *) hjstate));
+		rclauses = lappend(rclauses, ExecInitExpr(lsecond(hclause->args), (PlanState *) hjstate));
+
 		hoperators = lappend_oid(hoperators, hclause->opno);
 	}
 	hjstate->hj_OuterHashKeys = lclauses;

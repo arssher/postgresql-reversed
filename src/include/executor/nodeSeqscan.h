@@ -53,7 +53,7 @@ SeqPushNull(PlanState *node, SeqScanState *pusher)
 	ExecClearTuple(slot);
 
 	if (projInfo)
-		pushTuple(ExecClearTuple(projInfo->pi_slot), node,
+		pushTuple(ExecClearTuple(projInfo->pi_state.resultslot), node,
 				  (PlanState *) pusher);
 	else
 		pushTuple(slot, node,
@@ -103,7 +103,7 @@ static inline bool SeqPushHeapTuple(HeapTuple tuple, PlanState *node,
 							 SeqScanState *pusher)
 {
 	ExprContext *econtext;
-	List	   *qual;
+	ExprState	   *qual;
 	ProjectionInfo *projInfo;
 	TupleTableSlot *slot;
 
@@ -146,7 +146,7 @@ static inline bool SeqPushHeapTuple(HeapTuple tuple, PlanState *node,
 	 * when the qual is nil ... saves only a few cycles, but they add up
 	 * ...
 	 */
-	if (!qual || ExecQual(qual, econtext, false))
+	if (!qual || ExecQual(qual, econtext))
 	{
 		/*
 		 * Found a satisfactory scan tuple.

@@ -1645,7 +1645,7 @@ project_aggregates(AggState *aggstate)
 	/*
 	 * Check the qual (HAVING clause); if the group does not match, ignore it.
 	 */
-	if (ExecQual(aggstate->ss.ps.qual, econtext, false))
+	if (ExecQual(aggstate->ss.ps.qual, econtext))
 	{
 		/*
 		 * Form and return projection tuple using the aggregate results and
@@ -1673,7 +1673,7 @@ project_aggregates_and_push(AggState *aggstate)
 	/*
 	 * Check the qual (HAVING clause); if the group does not match, ignore it.
 	 */
-	if (ExecQual(aggstate->ss.ps.qual, econtext, false))
+	if (ExecQual(aggstate->ss.ps.qual, econtext))
 	{
 		/*
 		 * Form and return or store a projection tuple using the aggregate
@@ -2512,13 +2512,10 @@ ExecInitAgg(Agg *node, EState *estate, int eflags, PlanState *parent)
 	 * under SQL semantics anyway (and it's forbidden by the spec). Because
 	 * that is true, we don't need to worry about evaluating the aggs in any
 	 * particular order.
+	 * FIXME: adjust comment (now added in projection)
 	 */
-	aggstate->ss.ps.targetlist = (List *)
-		ExecInitExpr((Expr *) node->plan.targetlist,
-					 (PlanState *) aggstate);
-	aggstate->ss.ps.qual = (List *)
-		ExecInitExpr((Expr *) node->plan.qual,
-					 (PlanState *) aggstate);
+	aggstate->ss.ps.qual =
+		ExecInitQual(node->plan.qual, (PlanState *) aggstate);
 
 	/*
 	 * Initialize child nodes.
@@ -2731,7 +2728,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags, PlanState *parent)
 	foreach(l, aggstate->aggs)
 	{
 		AggrefExprState *aggrefstate = (AggrefExprState *) lfirst(l);
-		Aggref	   *aggref = (Aggref *) aggrefstate->xprstate.expr;
+		Aggref	   *aggref = aggrefstate->aggref;
 		AggStatePerAgg peragg;
 		AggStatePerTrans pertrans;
 		int			existing_aggno;
@@ -3031,11 +3028,10 @@ ExecInitAgg(Agg *node, EState *estate, int eflags, PlanState *parent)
 	/* and then create a projection for that targetlist */
 	aggstate->evaldesc = ExecTypeFromTL(combined_inputeval, false);
 	aggstate->evalslot = ExecInitExtraTupleSlot(estate);
-	combined_inputeval = (List *) ExecInitExpr((Expr *) combined_inputeval,
-											   (PlanState *) aggstate);
 	aggstate->evalproj = ExecBuildProjectionInfo(combined_inputeval,
 												 aggstate->tmpcontext,
 												 aggstate->evalslot,
+												 &aggstate->ss.ps,
 												 NULL);
 	ExecSetSlotDescriptor(aggstate->evalslot, aggstate->evaldesc);
 
@@ -3213,8 +3209,8 @@ build_pertrans_for_aggref(AggStatePerTrans pertrans,
 	naggs = aggstate->numaggs;
 	pertrans->aggfilter = ExecInitExpr(aggref->aggfilter,
 									   (PlanState *) aggstate);
-	pertrans->aggdirectargs = (List *) ExecInitExpr((Expr *) aggref->aggdirectargs,
-													(PlanState *) aggstate);
+	pertrans->aggdirectargs = ExecInitExprList(aggref->aggdirectargs,
+											   (PlanState *) aggstate);
 
 	/*
 	 * Complain if the aggregate's arguments contain any aggregates; nested

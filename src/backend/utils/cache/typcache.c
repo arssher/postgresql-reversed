@@ -102,6 +102,7 @@ static TypeCacheEntry *firstDomainTypeEntry = NULL;
  * the DomainConstraintState nodes and applying ExecInitExpr to check_expr.
  * Such a state tree is not part of the DomainConstraintCache, but is
  * considered to belong to a DomainConstraintRef.
+ * FIXME: update.
  */
 struct DomainConstraintCache
 {
@@ -779,8 +780,8 @@ load_domaintype_info(TypeCacheEntry *typentry)
 			r = makeNode(DomainConstraintState);
 			r->constrainttype = DOM_CONSTRAINT_CHECK;
 			r->name = pstrdup(NameStr(c->conname));
-			/* Must cast here because we're not storing an expr state node */
-			r->check_expr = (ExprState *) check_expr;
+			r->check_expr = check_expr;
+			r->check_exprstate = NULL;
 
 			MemoryContextSwitchTo(oldcxt);
 
@@ -859,6 +860,7 @@ load_domaintype_info(TypeCacheEntry *typentry)
 		r->constrainttype = DOM_CONSTRAINT_NOTNULL;
 		r->name = pstrdup("NOT NULL");
 		r->check_expr = NULL;
+		r->check_exprstate = NULL;
 
 		/* lcons to apply the nullness check FIRST */
 		dcc->constraints = lcons(r, dcc->constraints);
@@ -946,8 +948,8 @@ prep_domain_constraints(List *constraints, MemoryContext execctx)
 		newr = makeNode(DomainConstraintState);
 		newr->constrainttype = r->constrainttype;
 		newr->name = r->name;
-		/* Must cast here because cache items contain expr plan trees */
-		newr->check_expr = ExecInitExpr((Expr *) r->check_expr, NULL);
+		newr->check_expr = r->check_expr;
+		newr->check_exprstate = ExecInitExpr(r->check_expr, NULL);
 
 		result = lappend(result, newr);
 	}

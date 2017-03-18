@@ -52,7 +52,8 @@ static TupleTableSlot *TidNext(TidScanState *node);
 static void
 TidListCreate(TidScanState *tidstate)
 {
-	List	   *evalList = tidstate->tss_tidquals;
+	TidScan	   *node = (TidScan *) tidstate->ss.ps.plan;
+	List	   *evalList = node->tidquals;
 	ExprContext *econtext = tidstate->ss.ps.ps_ExprContext;
 	BlockNumber nblocks;
 	ItemPointerData *tidList;
@@ -81,28 +82,29 @@ TidListCreate(TidScanState *tidstate)
 
 	foreach(l, evalList)
 	{
-		ExprState  *exstate = (ExprState *) lfirst(l);
-		Expr	   *expr = exstate->expr;
+		Expr	   *expr = (Expr*) lfirst(l);
 		ItemPointer itemptr;
 		bool		isNull;
 
 		if (is_opclause(expr))
 		{
-			FuncExprState *fexstate = (FuncExprState *) exstate;
+			FuncExpr   *fex = (FuncExpr *) expr;
+			ExprState  *exprstate;
 			Node	   *arg1;
 			Node	   *arg2;
 
 			arg1 = get_leftop(expr);
 			arg2 = get_rightop(expr);
 			if (IsCTIDVar(arg1))
-				exstate = (ExprState *) lsecond(fexstate->args);
+				exprstate = ExecInitExpr((Expr *) lsecond(fex->args),
+										  &tidstate->ss.ps);
 			else if (IsCTIDVar(arg2))
-				exstate = (ExprState *) linitial(fexstate->args);
-			else
+				exprstate = ExecInitExpr((Expr *) linitial(fex->args),
+										  &tidstate->ss.ps);
 				elog(ERROR, "could not identify CTID variable");
 
 			itemptr = (ItemPointer)
-				DatumGetPointer(ExecEvalExprSwitchContext(exstate,
+				DatumGetPointer(ExecEvalExprSwitchContext(exprstate,
 														  econtext,
 														  &isNull));
 			if (!isNull &&
@@ -121,7 +123,8 @@ TidListCreate(TidScanState *tidstate)
 		}
 		else if (expr && IsA(expr, ScalarArrayOpExpr))
 		{
-			ScalarArrayOpExprState *saexstate = (ScalarArrayOpExprState *) exstate;
+			ScalarArrayOpExpr *saex = (ScalarArrayOpExpr *) expr;
+			ExprState  *exprstate;
 			Datum		arraydatum;
 			ArrayType  *itemarray;
 			Datum	   *ipdatums;
@@ -129,8 +132,8 @@ TidListCreate(TidScanState *tidstate)
 			int			ndatums;
 			int			i;
 
-			exstate = (ExprState *) lsecond(saexstate->fxprstate.args);
-			arraydatum = ExecEvalExprSwitchContext(exstate,
+			exprstate = ExecInitExpr(lsecond(saex->args), &tidstate->ss.ps);
+			arraydatum = ExecEvalExprSwitchContext(exprstate,
 												   econtext,
 												   &isNull);
 			if (isNull)
@@ -470,16 +473,8 @@ ExecInitTidScan(TidScan *node, EState *estate, int eflags)
 	/*
 	 * initialize child expressions
 	 */
-	tidstate->ss.ps.targetlist = (List *)
-		ExecInitExpr((Expr *) node->scan.plan.targetlist,
-					 (PlanState *) tidstate);
-	tidstate->ss.ps.qual = (List *)
-		ExecInitExpr((Expr *) node->scan.plan.qual,
-					 (PlanState *) tidstate);
-
-	tidstate->tss_tidquals = (List *)
-		ExecInitExpr((Expr *) node->tidquals,
-					 (PlanState *) tidstate);
+	tidstate->ss.ps.qual =
+		ExecInitQual(node->scan.plan.qual, (PlanState *) tidstate);
 
 	/*
 	 * tuple table initialization

@@ -53,11 +53,10 @@ static inline bool CheckJoinQualAndPush(HashJoinState *node);
 static inline bool CheckOtherQualAndPush(HashJoinState *node)
 {
 	ExprContext *econtext = node->js.ps.ps_ExprContext;
-	List *otherqual = node->js.ps.qual;
+	ExprState *otherqual = node->js.ps.qual;
 	TupleTableSlot *slot;
 
-	if (otherqual == NIL ||
-		ExecQual(otherqual, econtext, false))
+	if (otherqual == NULL || ExecQual(otherqual, econtext))
 	{
 		slot = ExecProject(node->js.ps.ps_ProjInfo);
 		return pushTuple(slot, node->js.ps.parent, (PlanState *) node);
@@ -100,14 +99,14 @@ static inline bool PushUnmatched(HashJoinState *node)
  */
 static inline bool CheckJoinQualAndPush(HashJoinState *node)
 {
-	List	   *joinqual = node->js.joinqual;
+	ExprState	   *joinqual = node->js.joinqual;
 	ExprContext *econtext = node->js.ps.ps_ExprContext;
 
 	/*
 	 * Only the joinquals determine tuple match status, but all
 	 * quals must pass to actually return the tuple.
 	 */
-	if (joinqual == NIL || ExecQual(joinqual, econtext, false))
+	if (joinqual == NULL || ExecQual(joinqual, econtext))
 	{
 		node->hj_MatchedOuter = true;
 		HeapTupleHeaderSetMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple));
