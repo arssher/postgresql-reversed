@@ -9389,29 +9389,12 @@ heappushtups(HeapScanDesc scan,
 
 			tuple->t_data = (HeapTupleHeader) PageGetItem((Page) dp, lpp);
 			tuple->t_len = ItemIdGetLength(lpp);
-			ItemPointerSet(&(tuple->t_self), page, lineoff);
 
-			/*
-			 * if current tuple qualifies, push it.
-			 */
-			if (key != NULL)
-			{
-				HeapKeyTest(tuple, RelationGetDescr(scan->rs_rd),
-							nkeys, key, tuple_qualifies);
-			}
-			else
-			{
-				tuple_qualifies = true;
-			}
-
-			if (tuple_qualifies)
-			{
-				/* Push tuple */
-				scan->rs_cindex = lineindex;
-				pgstat_count_heap_getnext(scan->rs_rd);
-				if (!SeqPushHeapTuple(tuple, pusher))
-					return;
-			}
+			/* Push tuple */
+			scan->rs_cindex = lineindex;
+			pgstat_count_heap_getnext(scan->rs_rd);
+			if (!SeqPushHeapTuple(tuple, pusher))
+				return;
 
 			/*
 			 * and carry on to the next one anyway
