@@ -78,7 +78,10 @@ ExecPushTupleToLimit(TupleTableSlot *slot, LimitState *node)
 		node->position - node->offset >= node->count;
 	limit_accepts_tuples = parent_accepts_tuples && !last_tuple_pushed;
 	if (!limit_accepts_tuples)
+	{
 		node->lstate = LIMIT_DONE;
+		ExecPushNull(slot, (PlanState *) node);
+	}
 	return limit_accepts_tuples;
 }
 
